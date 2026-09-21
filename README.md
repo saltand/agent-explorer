@@ -46,6 +46,8 @@ By default the server scans these locations:
 | Claude Code | `~/.claude/projects` |
 | Codex | `~/.codex/sessions` |
 | Pi | `~/.pi/agent/sessions` |
+| Cursor Agent | `~/.cursor/projects`, `~/.cursor/acp-sessions` |
+| Grok Build | `~/.grok/sessions` |
 
 ### Where data lives
 
@@ -99,6 +101,9 @@ The app inspects the first lines of a JSONL file and picks the best-matching ada
 | Claude Code transcript | Per-line `user` / `assistant` events with `message.content` blocks |
 | Codex rollout | Envelope records such as `session_meta`, `turn_context`, `event_msg`, and `response_item` |
 | Pi session | Tree-structured Pi agent sessions with messages, tool calls/results, model changes, compactions, branch summaries, and extension entries |
+| Cursor Agent transcript | `role` + `message.content` logs under `agent-transcripts`, including `tool_use` blocks |
+| Cursor ACP store | SQLite `store.db` under `~/.cursor/acp-sessions` (conversation blobs converted to JSONL) |
+| Grok Build session | `chat_history.jsonl` with `user` / `assistant` / `reasoning` / `tool_result` records |
 
 Support of more file formats is on the way.
 

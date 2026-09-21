@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { extractMessages } from './extract'
-import { streamLines, type SessionSummary } from './scan'
+import { streamSessionLines, type SessionSummary } from './scan'
 
 export interface SearchHit {
   sessionId: string
@@ -204,7 +204,7 @@ export class SessionIndex {
     let count = 0
     this.#db.exec('begin')
     try {
-      for await (const line of streamLines(summary.path)) {
+      for await (const line of streamSessionLines(summary.path)) {
         const currentLine = lineIndex
         lineIndex += 1
         if (!line.trim()) continue

@@ -2,7 +2,8 @@ import { createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, resolve, sep } from 'node:path'
-import { AGENT_LABELS, resolveOwningRoot, type AgentRoot } from './agents'
+import { AGENT_LABELS, isIndexedSessionFile, resolveOwningRoot, type AgentRoot } from './agents'
+import { cursorStoreToJsonl, isCursorStorePath } from './cursor-store'
 import { SessionIndex } from './index-db'
 import { pathForSessionId, scanSessions, summarizeOne, type SessionSummary } from './scan'
 import { SessionWatcher } from './watch'
@@ -51,8 +52,8 @@ function resolveSessionPath(id: string, roots: AgentRoot[]): string | undefined 
   if (!decoded || decoded.includes('\0')) return undefined
 
   const absolute = resolve(decoded)
-  if (!resolveOwningRoot(absolute, roots)) return undefined
-  if (!absolute.endsWith('.jsonl')) return undefined
+  const root = resolveOwningRoot(absolute, roots)
+  if (!root || !isIndexedSessionFile(absolute, root)) return undefined
   return absolute
 }
 
@@ -179,14 +180,19 @@ export function createAppServer(options: ServerOptions) {
         for (const summary of index.listSessions({ limit: 100_000 })) {
           counts.set(summary.agent, (counts.get(summary.agent) ?? 0) + 1)
         }
-        sendJson(response, 200, {
-          agents: roots.map((root) => ({
+        const agents = []
+        const seen = new Set<string>()
+        for (const root of roots) {
+          if (seen.has(root.agent)) continue
+          seen.add(root.agent)
+          agents.push({
             agent: root.agent,
             label: AGENT_LABELS[root.agent],
             dir: root.dir,
             sessionCount: counts.get(root.agent) ?? 0,
-          })),
-        })
+          })
+        }
+        sendJson(response, 200, { agents })
         return
       }
 
@@ -229,6 +235,28 @@ export function createAppServer(options: ServerOptions) {
         const filePath = resolveSessionPath(id, roots)
         if (!filePath) {
           sendJson(response, 404, { error: 'Unknown session' })
+          return
+        }
+
+        if (isCursorStorePath(filePath)) {
+          let jsonl: string
+          try {
+            jsonl = cursorStoreToJsonl(filePath)
+          } catch {
+            sendJson(response, 404, { error: 'Session file is no longer available' })
+            return
+          }
+          const body = Buffer.from(jsonl, 'utf8')
+          response.writeHead(200, {
+            'content-type': 'application/x-ndjson; charset=utf-8',
+            'content-length': body.length,
+            'cache-control': 'no-store',
+          })
+          if (request.method === 'HEAD') {
+            response.end()
+            return
+          }
+          response.end(body)
           return
         }
 

@@ -2,15 +2,36 @@ import { describe, expect, it } from 'vitest'
 import { defaultAgentRoots, resolveOwningRoot, type AgentRoot } from './agents'
 
 describe('defaultAgentRoots', () => {
-  it('covers the three supported agents', () => {
+  it('covers the supported agents', () => {
     const roots = defaultAgentRoots({} as NodeJS.ProcessEnv)
-    expect(roots.map((root) => root.agent)).toEqual(['claude', 'codex', 'pi'])
+    expect(roots.map((root) => root.agent)).toEqual([
+      'claude',
+      'codex',
+      'pi',
+      'cursor',
+      'cursor',
+      'grok',
+    ])
   })
 
   it('honours environment overrides', () => {
-    const roots = defaultAgentRoots({ CODEX_HOME: '/custom/codex' } as NodeJS.ProcessEnv)
+    const roots = defaultAgentRoots({
+      CODEX_HOME: '/custom/codex',
+      CURSOR_CONFIG_DIR: '/custom/cursor',
+      GROK_HOME: '/custom/grok',
+    } as NodeJS.ProcessEnv)
     const codex = roots.find((root) => root.agent === 'codex')
+    const cursorRoots = roots.filter((root) => root.agent === 'cursor')
+    const grok = roots.find((root) => root.agent === 'grok')
     expect(codex?.dir).toBe('/custom/codex/sessions')
+    expect(cursorRoots).toEqual([
+      { agent: 'cursor', dir: '/custom/cursor/projects' },
+      { agent: 'cursor', dir: '/custom/cursor/acp-sessions', fileName: 'store.db' },
+    ])
+    expect(grok).toMatchObject({
+      dir: '/custom/grok/sessions',
+      fileName: 'chat_history.jsonl',
+    })
   })
 })
 

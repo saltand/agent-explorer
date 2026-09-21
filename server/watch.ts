@@ -1,7 +1,7 @@
 import { watch, type FSWatcher } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import type { AgentRoot } from './agents'
-import { resolveOwningRoot } from './agents'
+import { isIndexedSessionFile, resolveOwningRoot } from './agents'
 
 export interface FileChange {
   path: string
@@ -41,7 +41,18 @@ export class SessionWatcher {
           (_event, fileName) => {
             if (!fileName) return
             const name = fileName.toString()
+            const base = basename(name)
+            if (root.fileName === 'store.db') {
+              if (base === 'store.db-wal' || base === 'store.db-shm' || base === 'meta.json') {
+                this.#schedule(resolve(root.dir, dirname(name), 'store.db'))
+                return
+              }
+              if (base !== 'store.db') return
+              this.#schedule(resolve(root.dir, name))
+              return
+            }
             if (!name.endsWith('.jsonl')) return
+            if (root.fileName && base !== root.fileName) return
             this.#schedule(resolve(root.dir, name))
           },
         )
@@ -66,7 +77,7 @@ export class SessionWatcher {
       // Resolve against the deepest root so nested agent homes are attributed
       // to the right agent.
       const root = resolveOwningRoot(path, this.#roots)
-      if (!root) return
+      if (!root || !isIndexedSessionFile(path, root)) return
       this.#onChange({ path, agent: root.agent })
     }, this.#debounceMs)
 

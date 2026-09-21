@@ -3,7 +3,15 @@ import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { existsSync } from 'node:fs'
-import { AGENT_LABELS, defaultAgentRoots, type AgentKind, type AgentRoot } from './agents'
+import {
+  AGENT_KINDS,
+  AGENT_LABELS,
+  createAgentRoot,
+  defaultAgentRoots,
+  isAgentKind,
+  type AgentKind,
+  type AgentRoot,
+} from './agents'
 import { createAppServer } from './http'
 import { SessionIndex } from './index-db'
 
@@ -20,7 +28,6 @@ export interface CliOptions {
 }
 
 const DEFAULT_PORT = 4317
-const KNOWN_AGENTS: AgentKind[] = ['claude', 'codex', 'pi']
 
 export function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
@@ -66,12 +73,12 @@ export function parseArgs(argv: string[]): CliOptions {
         if (!value) throw new Error('--agent expects a comma-separated list')
         const parsed = value.split(',').map((part) => part.trim().toLowerCase())
         for (const item of parsed) {
-          if (!KNOWN_AGENTS.includes(item as AgentKind)) {
-            throw new Error(`Unknown agent "${item}". Known: ${KNOWN_AGENTS.join(', ')}`)
+          if (!isAgentKind(item)) {
+            throw new Error(`Unknown agent "${item}". Known: ${AGENT_KINDS.join(', ')}`)
           }
         }
         // Repeatable: each occurrence adds to the allow-list.
-        options.agents = [...new Set([...(options.agents ?? []), ...(parsed as AgentKind[])])]
+        options.agents = [...new Set([...(options.agents ?? []), ...parsed])]
         break
       }
       case '--dir': {
@@ -81,10 +88,10 @@ export function parseArgs(argv: string[]): CliOptions {
         if (separator === -1) throw new Error('--dir expects <agent>:<path>')
         const agent = value.slice(0, separator).trim().toLowerCase()
         const dir = value.slice(separator + 1).trim()
-        if (!KNOWN_AGENTS.includes(agent as AgentKind)) {
-          throw new Error(`Unknown agent "${agent}". Known: ${KNOWN_AGENTS.join(', ')}`)
+        if (!isAgentKind(agent)) {
+          throw new Error(`Unknown agent "${agent}". Known: ${AGENT_KINDS.join(', ')}`)
         }
-        options.extraRoots.push({ agent: agent as AgentKind, dir: resolve(dir) })
+        options.extraRoots.push(createAgentRoot(agent, resolve(dir)))
         break
       }
       case '-h':
@@ -114,7 +121,7 @@ Options
   -H, --host <host>       Host to bind (default 127.0.0.1)
       --db <path>         Index location (default ~/.agent-explorer/index.db)
       --dir <agent>:<p>   Add an extra session directory for an agent
-      --agent <list>      Limit to agents: ${KNOWN_AGENTS.join(', ')} (repeatable)
+      --agent <list>      Limit to agents: ${AGENT_KINDS.join(', ')} (repeatable)
       --no-open           Do not open the browser automatically
       --no-watch          Do not watch session directories for changes
   -h, --help              Show this help
@@ -235,7 +242,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     )
   }
   for (const root of roots) {
-    process.stdout.write(`  ${AGENT_LABELS[root.agent].padEnd(12)} ${root.dir}\n`)
+    process.stdout.write(`  ${AGENT_LABELS[root.agent].padEnd(14)} ${root.dir}\n`)
   }
 
   process.stdout.write('scanning sessions…\n')

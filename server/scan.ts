@@ -1,7 +1,15 @@
 import { createReadStream } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
-import { basename, resolve } from 'node:path'
+import { open, readFile, readdir, stat } from 'node:fs/promises'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { AgentKind, AgentRoot } from './agents'
+import { isIndexedSessionFile } from './agents'
+import {
+  cursorStoreStat,
+  cursorStoreToJsonl,
+  isCursorStorePath,
+  summarizeCursorStore,
+} from './cursor-store'
+import { extractUserQuery } from './extract'
 
 export interface SessionSummary {
   /** Stable id derived from the absolute path. */
@@ -76,46 +84,44 @@ function cwdFromRecord(record: Record<string, unknown>): string | undefined {
   return undefined
 }
 
-/**
- * Best-effort first user message, used as the session title. Each agent nests
- * the role differently: Codex under `payload`, Pi under `message`, Claude keeps
- * a top-level `type` with `message.content`.
- */
-function titleFromRecord(record: Record<string, unknown>): string | undefined {
-  const payload = isRecord(record.payload) ? record.payload : undefined
+function recordRole(record: Record<string, unknown>): string | undefined {
+  if (typeof record.synthetic_reason === 'string') return undefined
+  if (typeof record.role === 'string') return record.role
   const message = isRecord(record.message) ? record.message : undefined
-
-  const candidates: Array<[string | undefined, unknown]> = [
-    [typeof record.role === 'string' ? record.role : undefined, record.content ?? record.text],
-    [
-      message && typeof message.role === 'string'
-        ? message.role
-        : record.type === 'user'
-          ? 'user'
-          : undefined,
-      message?.content,
-    ],
-    [payload && typeof payload.role === 'string' ? payload.role : undefined, payload?.content],
-  ]
-
-  for (const [role, content] of candidates) {
-    if (role !== 'user') continue
-    const text = extractText(content)
-    if (text) return text
-  }
+  if (message && typeof message.role === 'string') return message.role
+  const payload = isRecord(record.payload) ? record.payload : undefined
+  if (payload && typeof payload.role === 'string') return payload.role
+  if (record.type === 'user' || record.type === 'assistant') return record.type
   return undefined
 }
 
+function recordContent(record: Record<string, unknown>): unknown {
+  const message = isRecord(record.message) ? record.message : undefined
+  const payload = isRecord(record.payload) ? record.payload : undefined
+  return message?.content ?? payload?.content ?? record.content ?? record.text
+}
+
+/**
+ * Best-effort first user message, used as the session title. Each agent nests
+ * the role differently: Codex under `payload`, Pi/Cursor under `message`,
+ * Claude and Grok use a top-level `type`.
+ */
+function titleFromRecord(record: Record<string, unknown>): string | undefined {
+  if (recordRole(record) !== 'user') return undefined
+  const text = extractText(recordContent(record))
+  if (!text) return undefined
+  const query = extractUserQuery(text)
+  if (query) return cleanTitle(query) ?? query
+  return cleanTitle(text)
+}
+
 function extractText(content: unknown): string | undefined {
-  if (typeof content === 'string') return cleanTitle(content)
+  if (typeof content === 'string') return content.trim() || undefined
   if (!Array.isArray(content)) return undefined
   for (const part of content) {
     if (!isRecord(part)) continue
     const text = part.text
-    if (typeof text === 'string') {
-      const cleaned = cleanTitle(text)
-      if (cleaned) return cleaned
-    }
+    if (typeof text === 'string' && text.trim()) return text
   }
   return undefined
 }
@@ -145,14 +151,33 @@ async function summarizeFile(
   size: number,
   mtimeMs: number,
 ): Promise<SessionSummary> {
+  const parentName = basename(dirname(path))
   const summary: SessionSummary = {
     id: sessionIdForPath(path),
     path,
     agent,
-    fileName: basename(path),
+    fileName:
+      basename(path) === 'chat_history.jsonl' || basename(path) === 'store.db'
+        ? parentName
+        : basename(path),
     size,
     mtimeMs,
   }
+
+  if (isCursorStorePath(path)) {
+    try {
+      const extra = summarizeCursorStore(path)
+      summary.cwd ??= extra.cwd
+      summary.title ??= extra.title
+      summary.startedAt ??= extra.startedAt
+    } catch {
+      // Unreadable stores still appear with stat-only metadata.
+    }
+    summary.endedAt ??= mtimeMs
+    return summary
+  }
+
+  await applySidecarMetadata(path, summary)
 
   try {
     let lineCount = 0
@@ -202,7 +227,7 @@ async function summarizeFile(
           continue
         }
       }
-    } else {
+    } else if (lastHeadTimestamp !== undefined) {
       summary.endedAt = lastHeadTimestamp
     }
   } catch {
@@ -213,7 +238,36 @@ async function summarizeFile(
   return summary
 }
 
-async function collectJsonlFiles(dir: string, out: string[]): Promise<void> {
+async function applySidecarMetadata(path: string, summary: SessionSummary): Promise<void> {
+  if (basename(path) !== 'chat_history.jsonl') return
+
+  const sidecarPath = join(dirname(path), 'summary.json')
+  try {
+    const raw: unknown = JSON.parse(await readFile(sidecarPath, 'utf8'))
+    if (!isRecord(raw)) return
+    const info = isRecord(raw.info) ? raw.info : undefined
+    if (typeof info?.cwd === 'string') summary.cwd ??= info.cwd
+    if (typeof raw.generated_title === 'string') summary.title ??= cleanTitle(raw.generated_title)
+    if (typeof raw.session_summary === 'string') summary.title ??= cleanTitle(raw.session_summary)
+    const created = parseTimestamp(raw.created_at)
+    if (created !== undefined) summary.startedAt ??= created
+    const updated = parseTimestamp(raw.updated_at ?? raw.last_active_at)
+    if (updated !== undefined) summary.endedAt ??= updated
+  } catch {
+    // Sidecar is optional; JSONL probing still fills what it can.
+  }
+
+  if (!summary.cwd) {
+    try {
+      const decoded = decodeURIComponent(basename(dirname(dirname(path))))
+      if (decoded.startsWith('/')) summary.cwd = decoded
+    } catch {
+      // Encoded parent is best-effort.
+    }
+  }
+}
+
+async function collectJsonlFiles(dir: string, out: string[], fileName?: string): Promise<void> {
   let entries
   try {
     entries = await readdir(dir, { withFileTypes: true })
@@ -226,19 +280,20 @@ async function collectJsonlFiles(dir: string, out: string[]): Promise<void> {
     const full = resolve(dir, entry.name)
     if (entry.isDirectory()) {
       subdirs.push(full)
-    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      out.push(full)
+    } else if (entry.isFile()) {
+      const matches = fileName ? entry.name === fileName : entry.name.endsWith('.jsonl')
+      if (matches) out.push(full)
     }
   }
 
-  await Promise.all(subdirs.map((sub) => collectJsonlFiles(sub, out)))
+  await Promise.all(subdirs.map((sub) => collectJsonlFiles(sub, out, fileName)))
 }
 
 export async function scanSessions(roots: AgentRoot[]): Promise<SessionSummary[]> {
   const perRoot = await Promise.all(
     roots.map(async (root) => {
       const files: string[] = []
-      await collectJsonlFiles(root.dir, files)
+      await collectJsonlFiles(root.dir, files, root.fileName)
       return { root, files }
     }),
   )
@@ -248,9 +303,12 @@ export async function scanSessions(roots: AgentRoot[]): Promise<SessionSummary[]
     const results = await Promise.all(
       files.map(async (file) => {
         try {
-          const info = await stat(file)
-          if (info.size === 0) return undefined
-          return await summarizeFile(file, root.agent, info.size, info.mtimeMs)
+          if (!isIndexedSessionFile(file, root)) return undefined
+          const info = isCursorStorePath(file) ? cursorStoreStat(file) : await stat(file)
+          const size = 'size' in info ? info.size : 0
+          const mtimeMs = 'mtimeMs' in info ? info.mtimeMs : 0
+          if (size === 0) return undefined
+          return await summarizeFile(file, root.agent, size, mtimeMs)
         } catch {
           return undefined
         }
@@ -270,12 +328,27 @@ export async function summarizeOne(
   agent: AgentKind,
 ): Promise<SessionSummary | undefined> {
   try {
+    if (isCursorStorePath(path)) {
+      const info = cursorStoreStat(path)
+      if (info.size === 0) return undefined
+      return await summarizeFile(path, agent, info.size, info.mtimeMs)
+    }
     const info = await stat(path)
     if (!info.isFile() || info.size === 0) return undefined
     return await summarizeFile(path, agent, info.size, info.mtimeMs)
   } catch {
     return undefined
   }
+}
+
+/** Yields JSONL lines, converting Cursor SQLite stores on the fly. */
+export async function* streamSessionLines(path: string): AsyncIterable<string> {
+  if (isCursorStorePath(path)) {
+    const jsonl = cursorStoreToJsonl(path)
+    if (jsonl) yield* jsonl.split('\n')
+    return
+  }
+  yield* streamLines(path)
 }
 
 /** Streams a file line by line without holding it in memory. */

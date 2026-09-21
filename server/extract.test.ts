@@ -85,6 +85,52 @@ describe('extractMessages', () => {
     ).toEqual([])
   })
 
+  it('indexes Grok user_query text and skips synthetic reminders', () => {
+    expect(
+      extractMessages({
+        type: 'user',
+        content: [
+          {
+            type: 'text',
+            text: '<user_info>\nWorkspace Path: /tmp\n</user_info>\n<user_query>\nlist files\n</user_query>',
+          },
+        ],
+      }),
+    ).toEqual([{ role: 'user', text: 'list files' }])
+    expect(
+      extractMessages({
+        type: 'user',
+        synthetic_reason: 'system_reminder',
+        content: [{ type: 'text', text: '<system-reminder>skills</system-reminder>' }],
+      }),
+    ).toEqual([])
+  })
+
+  it('indexes Grok reasoning summaries', () => {
+    expect(
+      extractMessages({
+        type: 'reasoning',
+        summary: [{ type: 'summary_text', text: 'need to list files' }],
+      }),
+    ).toEqual([{ role: 'thinking', text: 'need to list files' }])
+  })
+
+  it('indexes Cursor Agent user_query text nested under message', () => {
+    expect(
+      extractMessages({
+        role: 'user',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '<timestamp>now</timestamp>\n<user_query>\ninspect the repo\n</user_query>',
+            },
+          ],
+        },
+      }),
+    ).toEqual([{ role: 'user', text: 'inspect the repo' }])
+  })
+
   it('ignores event_msg envelopes and malformed records', () => {
     expect(extractMessages({ type: 'event_msg', payload: { type: 'token_count' } })).toEqual([])
     expect(extractMessages(null)).toEqual([])

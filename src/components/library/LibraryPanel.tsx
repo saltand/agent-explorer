@@ -142,7 +142,7 @@ export function LibraryPanel() {
       </div>
 
       {agents.length > 1 && (
-        <div className="flex gap-1 border-b border-separator px-1.5 py-1">
+        <div className="flex flex-wrap gap-1 border-b border-separator px-1.5 py-1">
           <button
             type="button"
             onClick={() => void setAgentFilter(undefined)}

@@ -1,0 +1,4 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<timestamp>Monday, Jan 1, 2026, 12:00 PM (UTC+8)</timestamp>\n<user_query>\nInspect the project\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"I'll inspect it."},{"type":"tool_use","name":"Glob","input":{"glob_pattern":"**/*.ts"}}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"It is a TypeScript app."}]}}
+{"type":"turn_ended","status":"success"}

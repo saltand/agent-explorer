@@ -77,6 +77,25 @@ describe('summarizeOne', () => {
     expect(summary?.title).toBe('这个项目是什么')
   })
 
+  it('uses <user_query> as the title for Cursor Agent records', async () => {
+    const path = join(dir, 'cursor.jsonl')
+    writeFileSync(
+      path,
+      jsonl({
+        role: 'user',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: '<timestamp>now</timestamp>\n<user_query>\ninspect the repo\n</user_query>',
+            },
+          ],
+        },
+      }),
+    )
+    expect((await summarizeOne(path, 'cursor'))?.title).toBe('inspect the repo')
+  })
+
   it('skips injected context when choosing a title', async () => {
     const path = join(dir, 'ctx.jsonl')
     writeFileSync(
@@ -165,5 +184,41 @@ describe('scanSessions', () => {
 
   it('returns nothing for a missing root instead of throwing', async () => {
     await expect(scanSessions([{ agent: 'pi', dir: join(dir, 'absent') }])).resolves.toEqual([])
+  })
+
+  it('indexes only Grok chat_history.jsonl files and reads the sidecar', async () => {
+    const encoded = encodeURIComponent('/Users/example/project')
+    const sessionDir = join(dir, encoded, 'session-id')
+    mkdirSync(sessionDir, { recursive: true })
+    writeFileSync(
+      join(sessionDir, 'chat_history.jsonl'),
+      jsonl({
+        type: 'user',
+        content: [{ type: 'text', text: '<user_query>\nfrom jsonl\n</user_query>' }],
+      }),
+    )
+    writeFileSync(join(sessionDir, 'updates.jsonl'), jsonl({ method: 'session/update' }))
+    writeFileSync(
+      join(sessionDir, 'summary.json'),
+      JSON.stringify({
+        info: { id: 'session-id', cwd: '/Users/example/project' },
+        generated_title: 'sidecar title',
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-01T00:05:00.000Z',
+      }),
+    )
+
+    const summaries = await scanSessions([
+      { agent: 'grok', dir, fileName: 'chat_history.jsonl' },
+    ])
+    expect(summaries).toHaveLength(1)
+    expect(summaries[0]).toMatchObject({
+      agent: 'grok',
+      fileName: 'session-id',
+      cwd: '/Users/example/project',
+      title: 'sidecar title',
+      startedAt: Date.parse('2026-01-01T00:00:00.000Z'),
+      endedAt: Date.parse('2026-01-01T00:05:00.000Z'),
+    })
   })
 })

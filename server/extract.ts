@@ -33,9 +33,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isInjectedContext(text: string): boolean {
   const trimmed = text.trimStart()
   if (!trimmed.startsWith('<')) return false
-  return /^<(environment_context|user_instructions|app-context|recommended_plugins|system-reminder|ide_context|plugins)\b/.test(
+  return /^<(environment_context|user_instructions|user_info|app-context|recommended_plugins|system-reminder|ide_context|plugins|git_status|rules)\b/.test(
     trimmed,
   )
+}
+
+/**
+ * Cursor Agent and Grok Build wrap the real prompt in `<user_query>`. Prefer
+ * that inner text for titles and search so the envelope is not indexed.
+ */
+export function extractUserQuery(text: string): string | undefined {
+  const match = /<user_query>\s*([\s\S]*?)\s*<\/user_query>/i.exec(text)
+  const inner = match?.[1]?.trim()
+  return inner || undefined
 }
 
 function collectText(content: unknown, out: string[]): void {
@@ -68,6 +78,8 @@ function collectText(content: unknown, out: string[]): void {
  */
 export function extractMessages(record: unknown): ExtractedMessage[] {
   if (!isRecord(record)) return []
+  // Grok injects skill reminders as synthetic user turns.
+  if (typeof record.synthetic_reason === 'string') return []
 
   const type = typeof record.type === 'string' ? record.type : undefined
 
@@ -78,9 +90,11 @@ export function extractMessages(record: unknown): ExtractedMessage[] {
     return extractMessages(record.payload)
   }
 
-  if (type === 'function_call' || type === 'function_call_output') return []
+  if (type === 'function_call' || type === 'function_call_output' || type === 'tool_result') {
+    return []
+  }
 
-  // Codex reasoning items.
+  // Codex / Grok reasoning items.
   if (type === 'reasoning') {
     const texts: string[] = []
     collectText(record.summary, texts)
@@ -88,7 +102,7 @@ export function extractMessages(record: unknown): ExtractedMessage[] {
     return buildMessages('thinking', texts)
   }
 
-  // Pi / Claude nest the payload under `message`.
+  // Pi / Claude / Cursor nest the payload under `message`.
   const message = isRecord(record.message) ? record.message : undefined
   const role =
     (typeof record.role === 'string' ? record.role : undefined) ??
@@ -106,7 +120,13 @@ function buildMessages(role: string, texts: string[]): ExtractedMessage[] {
   const messages: ExtractedMessage[] = []
   for (const text of texts) {
     const trimmed = text.trim()
-    if (!trimmed || isInjectedContext(trimmed)) continue
+    if (!trimmed) continue
+    const query = extractUserQuery(trimmed)
+    if (query) {
+      messages.push({ role, text: query })
+      continue
+    }
+    if (isInjectedContext(trimmed)) continue
     messages.push({ role, text: trimmed })
   }
   return messages

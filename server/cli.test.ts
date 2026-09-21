@@ -53,6 +53,13 @@ describe('parseArgs', () => {
     expect(options.extraRoots).toEqual([{ agent: 'codex', dir: '/tmp/sessions' }])
   })
 
+  it('indexes only Grok conversation logs when adding a grok root', () => {
+    const options = parseArgs(['--dir', 'grok:/tmp/sessions'])
+    expect(options.extraRoots).toEqual([
+      { agent: 'grok', dir: '/tmp/sessions', fileName: 'chat_history.jsonl' },
+    ])
+  })
+
   it('keeps path separators in --dir values after the first colon', () => {
     const options = parseArgs(['--dir', 'pi:/tmp/a:b/sessions'])
     expect(options.extraRoots).toEqual([{ agent: 'pi', dir: '/tmp/a:b/sessions' }])
