@@ -39,3 +39,8 @@ coverage
 
 # OS / tooling
 Thumbs.db
+# Server build output
+dist-server
+
+# Local scratch
+.tmp

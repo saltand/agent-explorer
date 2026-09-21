@@ -11,8 +11,17 @@ export default defineConfig({
     babel({ presets: [reactCompilerPreset()] }),
     tailwindcss(),
   ],
+  server: {
+    proxy: {
+      // Lets `pnpm dev` talk to a CLI server started with `pnpm dev:server`.
+      '/api': {
+        target: 'http://127.0.0.1:4317',
+        changeOrigin: true,
+      },
+    },
+  },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'server/**/*.test.ts'],
   },
 })

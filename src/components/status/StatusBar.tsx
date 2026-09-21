@@ -1,31 +1,24 @@
-import { Moon, Sun } from 'lucide-react'
-import { useRef, type ChangeEvent } from 'react'
-import { iconButton } from '../../styles/uiClasses'
-import { GitHub } from '../shared/icons/GitHub'
+import { Moon, PanelLeft, RotateCw, Sun } from 'lucide-react'
 import { ToolbarButton } from '../shared/ToolbarButton'
+import { useLibraryStore } from '../../store/libraryStore'
 import { useSessionStore } from '../../store/sessionStore'
 import { ParseWarningsBadge } from './ParseWarningsBadge'
 import { SearchInput } from './SearchInput'
 import { SettingsPopover } from './SettingsPopover'
 
-const GITHUB_REPOSITORY_URL = 'https://github.com/unixzii/agent-explorer'
-
 export function StatusBar() {
-  const fileInputRef = useRef<HTMLInputElement>(null)
   const session = useSessionStore((s) => s.session)
-  const isLoading = useSessionStore((s) => s.isLoading)
   const error = useSessionStore((s) => s.error)
   const theme = useSessionStore((s) => s.theme)
-  const loadText = useSessionStore((s) => s.loadText)
-  const loadSample = useSessionStore((s) => s.loadSample)
+  const libraryOpen = useSessionStore((s) => s.libraryOpen)
+  const loadRemoteSession = useSessionStore((s) => s.loadRemoteSession)
   const setTheme = useSessionStore((s) => s.setTheme)
+  const toggleLibrary = useSessionStore((s) => s.toggleLibrary)
+  const serverStatus = useLibraryStore((s) => s.status)
+  const activeSessionId = useLibraryStore((s) => s.activeSessionId)
+  const staleSessionIds = useLibraryStore((s) => s.staleSessionIds)
 
-  function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    if (!file) return
-    void file.text().then((text) => loadText(text, file.name))
-    event.target.value = ''
-  }
+  const isStale = !!activeSessionId && staleSessionIds.includes(activeSessionId)
 
   function toggleTheme() {
     const next =
@@ -39,10 +32,6 @@ export function StatusBar() {
     setTheme(next)
   }
 
-  function openGitHub() {
-    window.open(GITHUB_REPOSITORY_URL, '_blank', 'noopener,noreferrer')
-  }
-
   const isDark =
     theme === 'dark' ||
     (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
@@ -51,33 +40,16 @@ export function StatusBar() {
     <header className="flex h-11 shrink-0 items-center gap-2 border-b border-separator bg-background px-1.5">
       <span className="px-2 text-sm font-semibold text-primary">Agent Explorer</span>
 
-      <div className="flex gap-1">
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={isLoading}
-          className="rounded bg-accent px-2.5 py-1 text-xs font-medium text-on-accent hover:bg-accent-overlay disabled:opacity-50"
+      {serverStatus === 'connected' && (
+        <ToolbarButton
+          onClick={toggleLibrary}
+          aria-label={libraryOpen ? 'Hide session library' : 'Show session library'}
+          title={libraryOpen ? 'Hide library' : 'Show library'}
+          aria-pressed={libraryOpen}
         >
-          Open
-        </button>
-
-        <button
-          type="button"
-          onClick={() => void loadSample()}
-          disabled={isLoading}
-          className={`rounded px-2.5 py-1 text-xs disabled:opacity-50 ${iconButton}`}
-        >
-          Load Sample
-        </button>
-      </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".jsonl,.json"
-        className="hidden"
-        onChange={handleFileChange}
-      />
+          <PanelLeft size={14} strokeWidth={1.75} aria-hidden />
+        </ToolbarButton>
+      )}
 
       <div className="flex items-baseline gap-1">
         {session && (
@@ -92,6 +64,18 @@ export function StatusBar() {
 
         {session && session.parseWarnings.length > 0 && (
           <ParseWarningsBadge warnings={session.parseWarnings} />
+        )}
+
+        {isStale && (
+          <button
+            type="button"
+            onClick={() => void loadRemoteSession(activeSessionId)}
+            className="inline-flex items-center gap-1 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/25"
+            title="This session changed on disk. Reload to see the latest events."
+          >
+            <RotateCw size={10} strokeWidth={2} aria-hidden />
+            Reload
+          </button>
         )}
 
         {error && <span className="truncate text-xs text-danger">{error}</span>}
@@ -117,14 +101,6 @@ export function StatusBar() {
           ) : (
             <Moon size={14} strokeWidth={1.75} aria-hidden />
           )}
-        </ToolbarButton>
-
-        <ToolbarButton
-          onClick={openGitHub}
-          aria-label="GitHub Repository"
-          title="GitHub Repository"
-        >
-          <GitHub size={16} />
         </ToolbarButton>
       </div>
     </header>

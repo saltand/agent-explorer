@@ -89,7 +89,12 @@ export interface ParsedLine {
   data: unknown
 }
 
-export type SelectionSource = 'timeline' | 'conversation'
+/**
+ * Which view originated a selection. Panels skip auto-scrolling when they are
+ * the source; `external` marks programmatic jumps (e.g. opening a search hit),
+ * so every panel scrolls to reveal the target.
+ */
+export type SelectionSource = 'timeline' | 'conversation' | 'external'
 
 export interface Selection {
   source: SelectionSource

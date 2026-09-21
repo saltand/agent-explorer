@@ -1,14 +1,38 @@
 {
   "name": "agent-explorer",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "description": "Browse and search local agent session logs (Claude Code, Codex, Pi) in your browser",
+  "license": "MIT",
+  "bin": {
+    "agent-explorer": "dist-server/main.js"
+  },
+  "files": [
+    "dist-server",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "agent",
+    "jsonl",
+    "session",
+    "viewer"
+  ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "dev:server": "pnpm build:server && node dist-server/main.js --no-open",
+    "build": "tsc -b && vite build && pnpm build:server",
+    "build:server": "vite build --config vite.config.server.ts",
+    "start": "node dist-server/main.js",
     "lint": "oxlint",
     "test": "vitest run",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "@babel/core": "^7.29.7",
