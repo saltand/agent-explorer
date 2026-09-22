@@ -8,6 +8,7 @@ import {
 import { useSessionStore } from '../../store/sessionStore'
 import { CollapsibleJson } from './CollapsibleJson'
 import { EventSummary } from './EventSummary'
+import { RequestMetricsPanel } from './RequestMetricsPanel'
 import { SessionMetaPanel } from './SessionMetaPanel'
 import { SessionTurnsPanel } from './SessionTurnsPanel'
 import { SessionUsagePanel } from './SessionUsagePanel'
@@ -80,6 +81,7 @@ export function DetailPanel() {
           <div className="flex flex-col gap-3">
             <ToolCallInspector session={session} selection={selection} />
             <EventSummary selection={selection} />
+            <RequestMetricsPanel session={session} selection={selection} />
           </div>
         )}
         {tab === 'usage' && (
