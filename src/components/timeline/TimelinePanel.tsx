@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useCallback, type KeyboardEvent } from 'react'
+import { useRef, useEffect, useMemo, useCallback, useState, type KeyboardEvent } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { emptyState, emptyStateXs, panelHeader } from '../../styles/uiClasses'
 import { filterTimelineEvents } from '../../core/filter'
@@ -8,6 +8,7 @@ import { useSettingsStore } from '../../store/settingsStore'
 import { useSpringScrollToFn } from '../shared/useSpringScrollToFn'
 import { TIMELINE_ITEM_HEIGHT, TimelineItem } from './TimelineItem'
 import { TimelineCategoryFilter } from './TimelineCategoryFilter'
+import { TimingChart } from './TimingChart'
 import {
   findTimelineEventIndex,
   resolveTimelineNavigationIndex,
@@ -21,11 +22,14 @@ export function TimelinePanel() {
   const selectTimelineEvent = useSessionStore((s) => s.selectTimelineEvent)
   const searchQuery = useSettingsStore((s) => s.searchQuery)
   const timelineCategoryFilter = useSettingsStore((s) => s.timelineCategoryFilter)
+  const timeRange = useSettingsStore((s) => s.timeRange)
+  const setTimeRange = useSettingsStore((s) => s.setTimeRange)
   const hideSystem = useSettingsStore((s) => s.hideSystem)
   const hideToolCalls = useSettingsStore((s) => s.hideToolCalls)
   const highlightSameRequest = useSettingsStore((s) => s.highlightSameRequest)
   const parentRef = useRef<HTMLDivElement>(null)
   const selectedId = selection?.event?.id
+  const [view, setView] = useState<'list' | 'timing'>('list')
 
   const allEvents = session?.events ?? EMPTY_EVENTS
 
@@ -38,10 +42,11 @@ export function TimelinePanel() {
       filterTimelineEvents(allEvents, {
         searchQuery,
         timelineCategoryFilter,
+        timeRange,
         hideSystem,
         hideToolCalls,
       }),
-    [allEvents, searchQuery, timelineCategoryFilter, hideSystem, hideToolCalls],
+    [allEvents, searchQuery, timelineCategoryFilter, timeRange, hideSystem, hideToolCalls],
   )
 
   const scrollToFn = useSpringScrollToFn()
@@ -95,12 +100,12 @@ export function TimelinePanel() {
   )
 
   useEffect(() => {
-    if (selection?.source === 'timeline') {
+    if (view !== 'list' || selection?.source === 'timeline') {
       return
     }
     const index = events.findIndex((e) => e.id === selectedId)
     if (index >= 0) virtualizer.scrollToIndex(index, { align: 'center', behavior: 'smooth' })
-  }, [selection?.source, selectedId, events, virtualizer])
+  }, [view, selection?.source, selectedId, events, virtualizer])
 
   if (!session) {
     return (
@@ -112,11 +117,34 @@ export function TimelinePanel() {
 
   return (
     <div className="flex h-full flex-col bg-background">
-      <div className={panelHeader}>
-        Timeline · {events.length}
-        {events.length !== allEvents.length ? ` / ${allEvents.length}` : ''} events
+      <div className={`flex items-center justify-between gap-2 ${panelHeader}`}>
+        <span className="truncate">
+          Timeline · {events.length}
+          {events.length !== allEvents.length ? ` / ${allEvents.length}` : ''} events
+        </span>
+        <span className="flex shrink-0 items-center gap-1">
+          {timeRange && (
+            <button
+              type="button"
+              onClick={() => setTimeRange(null)}
+              className="rounded bg-overlay-emphasized px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-overlay"
+              title="Clear the selected interval"
+            >
+              interval ×
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setView(view === 'list' ? 'timing' : 'list')}
+            className="rounded px-1.5 py-0.5 text-[10px] font-medium text-secondary hover:bg-overlay hover:text-primary"
+          >
+            {view === 'list' ? 'Timing' : 'Events'}
+          </button>
+        </span>
       </div>
-      <TimelineCategoryFilter />
+      {view === 'list' && <TimelineCategoryFilter />}
+      {view === 'timing' && <TimingChart session={session} />}
+      {view === 'list' && (
       <div
         ref={parentRef}
         tabIndex={0}
@@ -166,6 +194,7 @@ export function TimelinePanel() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

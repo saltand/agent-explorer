@@ -73,13 +73,22 @@ export function filterTimelineEvents(
   events: TimelineEvent[],
   settings: Pick<
     ExplorerSettings,
-    'searchQuery' | 'timelineCategoryFilter' | 'hideSystem' | 'hideToolCalls'
+    'searchQuery' | 'timelineCategoryFilter' | 'timeRange' | 'hideSystem' | 'hideToolCalls'
   >,
 ): TimelineEvent[] {
   const query = settings.searchQuery.trim()
 
   return events.filter((event) => {
     if (settings.hideSystem && isSystemTimelineEvent(event)) return false
+    // An interval selection can only contain events that carry a timestamp.
+    if (
+      settings.timeRange &&
+      (event.timestamp === undefined ||
+        event.timestamp < settings.timeRange[0] ||
+        event.timestamp > settings.timeRange[1])
+    ) {
+      return false
+    }
     if (settings.hideToolCalls && isToolTimelineEvent(event)) return false
     if (
       settings.timelineCategoryFilter !== 'all' &&

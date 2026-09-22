@@ -7,6 +7,8 @@ export type TimelineCategoryFilter = 'all' | EventCategory
 export interface ExplorerSettings {
   searchQuery: string
   timelineCategoryFilter: TimelineCategoryFilter
+  /** Epoch-ms interval selected on the timing chart; filters the event list. */
+  timeRange: [number, number] | null
   hideSystem: boolean
   hideThinking: boolean
   hideToolCalls: boolean
@@ -17,6 +19,7 @@ export interface ExplorerSettings {
 interface SettingsState extends ExplorerSettings {
   setSearchQuery: (query: string) => void
   setTimelineCategoryFilter: (filter: TimelineCategoryFilter) => void
+  setTimeRange: (range: [number, number] | null) => void
   setHideSystem: (hide: boolean) => void
   setHideThinking: (hide: boolean) => void
   setHideToolCalls: (hide: boolean) => void
@@ -28,6 +31,7 @@ interface SettingsState extends ExplorerSettings {
 const DEFAULT_SETTINGS: ExplorerSettings = {
   searchQuery: '',
   timelineCategoryFilter: 'all',
+  timeRange: null,
   hideSystem: false,
   hideThinking: false,
   hideToolCalls: false,
@@ -42,6 +46,7 @@ export const useSettingsStore = create<SettingsState>()(
 
       setSearchQuery: (searchQuery) => set({ searchQuery }),
       setTimelineCategoryFilter: (timelineCategoryFilter) => set({ timelineCategoryFilter }),
+      setTimeRange: (timeRange) => set({ timeRange }),
       setHideSystem: (hideSystem) => set({ hideSystem }),
       setHideThinking: (hideThinking) => set({ hideThinking }),
       setHideToolCalls: (hideToolCalls) => set({ hideToolCalls }),
@@ -51,6 +56,7 @@ export const useSettingsStore = create<SettingsState>()(
         set({
           searchQuery: '',
           timelineCategoryFilter: 'all',
+          timeRange: null,
         }),
     }),
     {

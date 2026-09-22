@@ -18,6 +18,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+// updates.jsonl records unix seconds; guard against millisecond timestamps.
+function parseTimestamp(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1e12 ? value * 1000 : value
+  }
+  if (typeof value === 'string') {
+    const ms = Date.parse(value)
+    return Number.isNaN(ms) ? undefined : ms
+  }
+  return undefined
+}
+
 function getString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key]
   return typeof value === 'string' ? value : undefined
@@ -234,6 +246,7 @@ export const grokBuildAdapter: SessionAdapter = {
       const event: TimelineEvent = {
         id: `line-${line.lineIndex}`,
         lineIndex: line.lineIndex,
+        timestamp: parseTimestamp(record.timestamp),
         category: eventCategory(type, record),
         kind: type,
         label: eventLabel(type, record, blocks),

@@ -162,7 +162,7 @@ export function toolErrorDetails(resultRaw: unknown): Array<{ label: string; val
 }
 
 /** Codex exec results announce a still-running process as "session ID N". */
-function execSessionId(resultRaw: unknown): number | undefined {
+export function execSessionId(resultRaw: unknown): number | undefined {
   for (const text of outputTexts(resultRaw)) {
     const match = /session ID\s+(\d+)/i.exec(text)
     if (match) return Number.parseInt(match[1]!, 10)
