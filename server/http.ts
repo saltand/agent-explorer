@@ -89,14 +89,39 @@ export function createAppServer(options: ServerOptions) {
     })()
   })
 
-  /** Full rescan: cheap because unchanged files are skipped by mtime/size. */
+  /**
+   * Full rescan. Unchanged files are recognized from the index snapshot by
+   * size/mtime, so they are neither re-probed off disk nor re-indexed.
+   */
   async function rescan(): Promise<{ scanned: number; indexed: number }> {
     if (scanning) return { scanned: 0, indexed: 0 }
     scanning = true
     try {
-      const summaries = await scanSessions(roots)
+      const known = index.indexedSnapshot()
+      const unchanged = new Set<string>()
+
+      const summaries = await scanSessions(roots, {
+        reuse: (candidate) => {
+          const entry = known.get(candidate.path)
+          if (!entry) return undefined
+          if (
+            entry.indexedSize !== candidate.size ||
+            entry.indexedMtimeMs !== candidate.mtimeMs ||
+            entry.summary.size !== candidate.size ||
+            entry.summary.mtimeMs !== candidate.mtimeMs
+          ) {
+            return undefined
+          }
+          unchanged.add(entry.summary.id)
+          return entry.summary
+        },
+      })
+
       let indexed = 0
       for (const summary of summaries) {
+        // Reused rows are already correct in the database; touching them would
+        // rewrite every row on every start for no benefit.
+        if (unchanged.has(summary.id)) continue
         if (!index.needsIndexing(summary)) {
           index.upsertSession(summary)
           continue

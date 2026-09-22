@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -182,5 +182,132 @@ describe('SessionIndex', () => {
 
   it('ignores empty queries', () => {
     expect(index.search({ query: '   ' })).toEqual([])
+  })
+
+  describe('incremental append indexing', () => {
+    const userMessage = (text: string) => ({
+      type: 'response_item',
+      payload: { type: 'message', role: 'user', content: [{ text }] },
+    })
+
+    /** Re-summarizes from disk the way the watcher does, then reindexes. */
+    async function reindex(path: string) {
+      const summary = await summarizeOne(path, 'codex')
+      if (!summary) throw new Error('failed to summarize fixture')
+      return index.indexSession(summary)
+    }
+
+    function matches(query: string): number {
+      return index.search({ query, limit: 50 }).length
+    }
+
+    it('indexes only newly appended lines', async () => {
+      const summary = await writeSession(
+        'append.jsonl',
+        jsonl(userMessage('alpha one'), userMessage('beta two')),
+      )
+      expect(await index.indexSession(summary)).toBe(2)
+
+      appendFileSync(summary.path, JSON.stringify(userMessage('gamma three')) + '\n')
+
+      // Only the new line is parsed and inserted.
+      expect(await reindex(summary.path)).toBe(1)
+      expect(matches('alpha one')).toBe(1)
+      expect(matches('gamma three')).toBe(1)
+    })
+
+    it('keeps byte offsets correct across multi-byte characters', async () => {
+      const summary = await writeSession('utf8.jsonl', jsonl(userMessage('需要多字节字符 🚀')))
+      expect(await index.indexSession(summary)).toBe(1)
+
+      appendFileSync(summary.path, JSON.stringify(userMessage('tail marker')) + '\n')
+
+      expect(await reindex(summary.path)).toBe(1)
+      expect(matches('tail marker')).toBe(1)
+      expect(matches('多字节')).toBe(1)
+    })
+
+    it('defers a partially written trailing line until it is complete', async () => {
+      const summary = await writeSession('partial.jsonl', jsonl(userMessage('first line')))
+      expect(await index.indexSession(summary)).toBe(1)
+
+      const pending = JSON.stringify(userMessage('second line'))
+      appendFileSync(summary.path, pending.slice(0, 20))
+
+      // The half-flushed line is skipped rather than indexed twice.
+      expect(await reindex(summary.path)).toBe(0)
+      expect(matches('second line')).toBe(0)
+
+      appendFileSync(summary.path, pending.slice(20) + '\n')
+      expect(await reindex(summary.path)).toBe(1)
+      expect(matches('second line')).toBe(1)
+    })
+
+    it('does not duplicate a valid trailing line that is later extended', async () => {
+      const summary = await writeSession('valid-tail.jsonl', jsonl(userMessage('kept line')))
+      expect(await index.indexSession(summary)).toBe(1)
+
+      // Valid JSON but no trailing newline: more bytes may still arrive.
+      appendFileSync(summary.path, JSON.stringify(userMessage('tail line')))
+      await reindex(summary.path)
+      appendFileSync(summary.path, '\n')
+      await reindex(summary.path)
+
+      expect(matches('tail line')).toBe(1)
+    })
+
+    it('fully reindexes when the file is rewritten instead of appended', async () => {
+      const summary = await writeSession(
+        'rewrite.jsonl',
+        jsonl(userMessage('stale content'), userMessage('also stale')),
+      )
+      expect(await index.indexSession(summary)).toBe(2)
+
+      writeFileSync(summary.path, jsonl(userMessage('fresh content')))
+
+      expect(await reindex(summary.path)).toBe(1)
+      expect(matches('stale content')).toBe(0)
+      expect(matches('also stale')).toBe(0)
+      expect(matches('fresh content')).toBe(1)
+    })
+
+    it('detects an in-place rewrite that grows the file', async () => {
+      // Size alone cannot distinguish this from an append, so the head
+      // signature is what forces a full reindex here.
+      const summary = await writeSession(
+        'grown-rewrite.jsonl',
+        jsonl(userMessage('original head'), userMessage('original tail')),
+      )
+      expect(await index.indexSession(summary)).toBe(2)
+
+      writeFileSync(
+        summary.path,
+        jsonl(
+          userMessage('replaced head with a much longer body than before'),
+          userMessage('replaced tail with a much longer body than before'),
+          userMessage('extra appended line to grow the file further'),
+        ),
+      )
+
+      await reindex(summary.path)
+      expect(matches('original head')).toBe(0)
+      expect(matches('original tail')).toBe(0)
+      expect(matches('replaced head')).toBe(1)
+      expect(matches('extra appended line')).toBe(1)
+    })
+
+    it('fully reindexes when the file is truncated', async () => {
+      const summary = await writeSession(
+        'truncate.jsonl',
+        jsonl(userMessage('line one'), userMessage('line two'), userMessage('line three')),
+      )
+      expect(await index.indexSession(summary)).toBe(3)
+
+      writeFileSync(summary.path, jsonl(userMessage('line one')))
+
+      await reindex(summary.path)
+      expect(matches('line two')).toBe(0)
+      expect(matches('line one')).toBe(1)
+    })
   })
 })

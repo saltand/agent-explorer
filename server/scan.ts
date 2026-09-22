@@ -289,7 +289,44 @@ async function collectJsonlFiles(dir: string, out: string[], fileName?: string):
   await Promise.all(subdirs.map((sub) => collectJsonlFiles(sub, out, fileName)))
 }
 
-export async function scanSessions(roots: AgentRoot[]): Promise<SessionSummary[]> {
+/**
+ * Probing a file means reading its head and tail, which is far more expensive
+ * than `stat`. Callers that already hold a summary for an unchanged file can
+ * return it here, letting the scan skip the probe entirely.
+ */
+export interface ScanOptions {
+  reuse?: (candidate: { path: string; size: number; mtimeMs: number }) => SessionSummary | undefined
+  concurrency?: number
+}
+
+/** Bounded parallel map, so a large corpus cannot open every file at once. */
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let cursor = 0
+  const workers = Math.max(1, Math.min(limit, items.length))
+  await Promise.all(
+    Array.from({ length: workers }, async () => {
+      while (true) {
+        const index = cursor
+        cursor += 1
+        if (index >= items.length) return
+        out[index] = await fn(items[index]!)
+      }
+    }),
+  )
+  return out
+}
+
+const DEFAULT_SCAN_CONCURRENCY = 32
+
+export async function scanSessions(
+  roots: AgentRoot[],
+  options: ScanOptions = {},
+): Promise<SessionSummary[]> {
   const perRoot = await Promise.all(
     roots.map(async (root) => {
       const files: string[] = []
@@ -298,25 +335,34 @@ export async function scanSessions(roots: AgentRoot[]): Promise<SessionSummary[]
     }),
   )
 
-  const summaries: SessionSummary[] = []
+  const targets: Array<{ file: string; root: AgentRoot }> = []
   for (const { root, files } of perRoot) {
-    const results = await Promise.all(
-      files.map(async (file) => {
-        try {
-          if (!isIndexedSessionFile(file, root)) return undefined
-          const info = isCursorStorePath(file) ? cursorStoreStat(file) : await stat(file)
-          const size = 'size' in info ? info.size : 0
-          const mtimeMs = 'mtimeMs' in info ? info.mtimeMs : 0
-          if (size === 0) return undefined
-          return await summarizeFile(file, root.agent, size, mtimeMs)
-        } catch {
-          return undefined
-        }
-      }),
-    )
-    for (const result of results) {
-      if (result) summaries.push(result)
+    for (const file of files) {
+      if (isIndexedSessionFile(file, root)) targets.push({ file, root })
     }
+  }
+
+  const results = await mapWithLimit(
+    targets,
+    options.concurrency ?? DEFAULT_SCAN_CONCURRENCY,
+    async ({ file, root }) => {
+      try {
+        const info = isCursorStorePath(file) ? cursorStoreStat(file) : await stat(file)
+        const size = 'size' in info ? info.size : 0
+        const mtimeMs = 'mtimeMs' in info ? info.mtimeMs : 0
+        if (size === 0) return undefined
+        const reused = options.reuse?.({ path: file, size, mtimeMs })
+        if (reused) return reused
+        return await summarizeFile(file, root.agent, size, mtimeMs)
+      } catch {
+        return undefined
+      }
+    },
+  )
+
+  const summaries: SessionSummary[] = []
+  for (const result of results) {
+    if (result) summaries.push(result)
   }
 
   summaries.sort((a, b) => b.mtimeMs - a.mtimeMs)
@@ -349,6 +395,57 @@ export async function* streamSessionLines(path: string): AsyncIterable<string> {
     return
   }
   yield* streamLines(path)
+}
+
+/** A line plus the byte offset just past its terminating newline. */
+export interface OffsetLine {
+  line: string
+  /** Byte offset where the next line begins. Safe to resume a read from. */
+  endOffset: number
+}
+
+/**
+ * Streams session lines starting at a byte offset, reporting the exact offset
+ * after each line so indexing can resume from where it stopped. Splits on raw
+ * bytes so multi-byte UTF-8 never skews the offsets.
+ *
+ * Cursor SQLite stores have no meaningful byte offsets, so they are converted
+ * in full and reported with offsets of 0, which keeps them on the full-reindex
+ * path in callers that compare offsets.
+ */
+export async function* streamLinesWithOffsets(
+  path: string,
+  start = 0,
+): AsyncIterable<OffsetLine> {
+  if (isCursorStorePath(path)) {
+    const jsonl = cursorStoreToJsonl(path)
+    if (jsonl) {
+      for (const line of jsonl.split('\n')) yield { line, endOffset: 0 }
+    }
+    return
+  }
+
+  const stream = createReadStream(path, { start })
+  let pending: Buffer = Buffer.alloc(0)
+  let offset = start
+
+  for await (const chunk of stream as AsyncIterable<Buffer>) {
+    pending = pending.length === 0 ? chunk : Buffer.concat([pending, chunk])
+    let newline = pending.indexOf(0x0a)
+    while (newline !== -1) {
+      const raw = pending.subarray(0, newline)
+      offset += newline + 1
+      yield { line: raw.toString('utf8'), endOffset: offset }
+      pending = pending.subarray(newline + 1)
+      newline = pending.indexOf(0x0a)
+    }
+  }
+
+  // A trailing line without a newline may still be mid-write, so the caller
+  // decides whether to trust it; report the offset before it either way.
+  if (pending.length > 0) {
+    yield { line: pending.toString('utf8'), endOffset: offset }
+  }
 }
 
 /** Streams a file line by line without holding it in memory. */

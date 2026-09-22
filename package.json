@@ -1,9 +1,21 @@
 {
-  "name": "agent-explorer",
-  "version": "0.1.0",
+  "name": "@saltand/agent-explorer",
+  "version": "0.0.1",
   "type": "module",
-  "description": "Browse and search local agent session logs (Claude Code, Codex, Pi) in your browser",
+  "description": "Browse and search local agent session logs (Claude Code, Codex, Pi, Cursor Agent, Grok Build) in your browser",
   "license": "MIT",
+  "author": "saltand",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saltand/agent-explorer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/saltand/agent-explorer/issues"
+  },
+  "homepage": "https://github.com/saltand/agent-explorer#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "bin": {
     "agent-explorer": "dist-server/main.js"
   },

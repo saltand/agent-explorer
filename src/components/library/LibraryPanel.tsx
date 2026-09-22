@@ -83,7 +83,7 @@ export function LibraryPanel() {
       <div className={`flex h-full flex-col items-center justify-center gap-2 p-4 text-center ${emptyStateXs}`}>
         <p>Local session library is unavailable.</p>
         <p className="text-tertiary">
-          Run <code className="rounded bg-overlay px-1">npx agent-explorer</code> to browse and
+          Run <code className="rounded bg-overlay px-1">npx @saltand/agent-explorer</code> to browse and
           search sessions on this machine.
         </p>
       </div>

@@ -1,10 +1,21 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { cursorStoreRecords, cursorStoreToJsonl, summarizeCursorStore } from './cursor-store'
+import {
+  cursorStoreRecords,
+  cursorStoreStat,
+  cursorStoreToJsonl,
+  summarizeCursorStore,
+} from './cursor-store'
 import { detectAndParse } from '../src/core/registry'
 
 function sha(data: Buffer): string {
@@ -113,5 +124,61 @@ describe('cursor store conversion', () => {
     expect(session.fileType).toBe('Cursor Agent')
     expect(session.conversationItems.map((item) => item.role)).toEqual(['user', 'thinking', 'assistant'])
     expect(session.conversationItems[0]?.block?.text).toBe('hi')
+  })
+})
+
+describe('cursorStoreStat change detection', () => {
+  let dir: string
+  let storePath: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'agent-explorer-shm-'))
+    storePath = join(dir, 'store.db')
+    writeFileSync(storePath, 'main-db')
+    writeFileSync(`${storePath}-wal`, 'wal-content')
+    writeFileSync(`${storePath}-shm`, 'shm-content')
+  })
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('ignores -shm mtime churn so unchanged stores are not reindexed', () => {
+    const before = cursorStoreStat(storePath)
+
+    // SQLite touches -shm whenever a connection opens, with no data change.
+    const later = new Date(Date.now() + 60_000)
+    utimesSync(`${storePath}-shm`, later, later)
+
+    expect(cursorStoreStat(storePath).mtimeMs).toBe(before.mtimeMs)
+  })
+
+  it('still reports a change when the WAL is written', () => {
+    const before = cursorStoreStat(storePath)
+
+    const later = new Date(Date.now() + 60_000)
+    writeFileSync(`${storePath}-wal`, 'wal-content-with-new-records')
+    utimesSync(`${storePath}-wal`, later, later)
+
+    const after = cursorStoreStat(storePath)
+    expect(after.mtimeMs).toBeGreaterThan(before.mtimeMs)
+    expect(after.size).not.toBe(before.size)
+  })
+
+  it('still reports a change when the main db is written', () => {
+    const before = cursorStoreStat(storePath)
+
+    const later = new Date(Date.now() + 60_000)
+    writeFileSync(storePath, 'main-db-rewritten')
+    utimesSync(storePath, later, later)
+
+    expect(cursorStoreStat(storePath).mtimeMs).toBeGreaterThan(before.mtimeMs)
+  })
+
+  it('counts sidecar sizes so WAL-only conversations are not missed', () => {
+    const withSidecars = cursorStoreStat(storePath)
+    rmSync(`${storePath}-wal`)
+
+    expect(cursorStoreStat(storePath).size).toBeLessThan(withSidecars.size)
   })
 })

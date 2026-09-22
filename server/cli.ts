@@ -72,13 +72,15 @@ export function parseArgs(argv: string[]): CliOptions {
         const value = next()
         if (!value) throw new Error('--agent expects a comma-separated list')
         const parsed = value.split(',').map((part) => part.trim().toLowerCase())
+        const agents: AgentKind[] = []
         for (const item of parsed) {
           if (!isAgentKind(item)) {
             throw new Error(`Unknown agent "${item}". Known: ${AGENT_KINDS.join(', ')}`)
           }
+          agents.push(item)
         }
         // Repeatable: each occurrence adds to the allow-list.
-        options.agents = [...new Set([...(options.agents ?? []), ...parsed])]
+        options.agents = [...new Set([...(options.agents ?? []), ...agents])]
         break
       }
       case '--dir': {
@@ -114,7 +116,7 @@ function printHelp(): void {
   process.stdout.write(`agent-explorer — browse local agent session logs in your browser
 
 Usage
-  npx agent-explorer [options]
+  npx @saltand/agent-explorer [options]
 
 Options
   -p, --port <n>          Port to listen on (default ${DEFAULT_PORT}, falls back if busy)
@@ -179,7 +181,12 @@ async function readVersion(): Promise<string> {
       try {
         const raw = await readFile(candidate, 'utf8')
         const parsed = JSON.parse(raw) as { name?: string; version?: string }
-        if (parsed.name === 'agent-explorer' && parsed.version) return parsed.version
+        if (
+          (parsed.name === 'agent-explorer' || parsed.name === '@saltand/agent-explorer') &&
+          parsed.version
+        ) {
+          return parsed.version
+        }
       } catch {
         continue
       }

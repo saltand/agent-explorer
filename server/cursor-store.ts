@@ -69,24 +69,48 @@ function toTranscriptRecord(record: Record<string, unknown>): Record<string, unk
   }
 }
 
-function childBlobIds(data: Buffer, hashes: Map<string, Buffer>): string[] {
-  const found: Array<{ offset: number; id: string }> = []
+/**
+ * Blob ids are fixed-width hashes embedded verbatim in parent blobs. Bucketing
+ * them by their first four bytes turns child lookup into a single scan of the
+ * parent, instead of one `indexOf` sweep per candidate id.
+ */
+interface HashIndex {
+  byPrefix: Map<number, Array<readonly [string, Buffer]>>
+  hashLength: number
+}
+
+function buildHashIndex(hashes: Map<string, Buffer>): HashIndex {
+  const byPrefix = new Map<number, Array<readonly [string, Buffer]>>()
+  let hashLength = 0
   for (const [id, hash] of hashes) {
-    let from = 0
-    while (from + hash.length <= data.length) {
-      const offset = data.indexOf(hash, from)
-      if (offset === -1) break
-      found.push({ offset, id })
-      from = offset + hash.length
-    }
+    if (hash.length < 4) continue
+    hashLength = hash.length
+    const prefix = hash.readUInt32BE(0)
+    const bucket = byPrefix.get(prefix)
+    if (bucket) bucket.push([id, hash])
+    else byPrefix.set(prefix, [[id, hash]])
   }
-  found.sort((a, b) => a.offset - b.offset)
+  return { byPrefix, hashLength }
+}
+
+/** Child ids in the order their hashes appear in the parent blob. */
+function childBlobIds(data: Buffer, index: HashIndex): string[] {
+  const { byPrefix, hashLength } = index
+  if (hashLength === 0 || data.length < hashLength) return []
+
   const ids: string[] = []
   const seen = new Set<string>()
-  for (const item of found) {
-    if (seen.has(item.id)) continue
-    seen.add(item.id)
-    ids.push(item.id)
+  const last = data.length - hashLength
+  for (let offset = 0; offset <= last; offset += 1) {
+    const bucket = byPrefix.get(data.readUInt32BE(offset))
+    if (!bucket) continue
+    for (const [id, hash] of bucket) {
+      if (seen.has(id)) continue
+      if (data.compare(hash, 0, hashLength, offset, offset + hashLength) !== 0) continue
+      seen.add(id)
+      ids.push(id)
+      break
+    }
   }
   return ids
 }
@@ -94,6 +118,26 @@ function childBlobIds(data: Buffer, hashes: Map<string, Buffer>): string[] {
 interface StoreBlob {
   id: string
   data: Buffer
+}
+
+function readStoreMeta(database: DatabaseSync): Record<string, unknown> | undefined {
+  const metaRow = database.prepare('select value from meta limit 1').get() as
+    | { value?: unknown }
+    | undefined
+  return decodeMetaValue(metaRow?.value)
+}
+
+/**
+ * Reads just the `meta` row. Metadata-only callers use this so listing a store
+ * never has to pull its blobs, which are the entire conversation by volume.
+ */
+function loadStoreMeta(storePath: string): Record<string, unknown> | undefined {
+  const database = new DatabaseSync(storePath, { readOnly: true, timeout: 2000 })
+  try {
+    return readStoreMeta(database)
+  } finally {
+    database.close()
+  }
 }
 
 function loadBlobs(storePath: string): { blobs: StoreBlob[]; rootId?: string; storeMeta?: Record<string, unknown> } {
@@ -110,10 +154,7 @@ function loadBlobs(storePath: string): { blobs: StoreBlob[]; rootId?: string; st
         return [{ id: record.id, data }]
       })
 
-    const metaRow = database.prepare('select value from meta limit 1').get() as
-      | { value?: unknown }
-      | undefined
-    const storeMeta = decodeMetaValue(metaRow?.value)
+    const storeMeta = readStoreMeta(database)
     const rootId =
       typeof storeMeta?.latestRootBlobId === 'string' ? storeMeta.latestRootBlobId : undefined
     return { blobs, rootId, storeMeta }
@@ -133,6 +174,7 @@ function orderedRecords(blobs: StoreBlob[], rootId?: string): Record<string, unk
       }
     }),
   )
+  const hashIndex = buildHashIndex(hashes)
 
   const out: Record<string, unknown>[] = []
   const seen = new Set<string>()
@@ -150,7 +192,7 @@ function orderedRecords(blobs: StoreBlob[], rootId?: string): Record<string, unk
       return
     }
 
-    for (const child of childBlobIds(blob.data, hashes)) visit(child)
+    for (const child of childBlobIds(blob.data, hashIndex)) visit(child)
   }
 
   if (rootId && byId.has(rootId)) visit(rootId)
@@ -175,16 +217,22 @@ export function isCursorStorePath(path: string): boolean {
 /**
  * Size and mtime include the WAL: Cursor often leaves the main db at 4 KB
  * while the conversation lives in `store.db-wal`.
+ *
+ * The `-shm` file is deliberately excluded from the change signal. SQLite
+ * touches that shared-memory index whenever a reader or writer connects, so its
+ * mtime churns even when no conversation data changed, which would invalidate
+ * the index on every scan. Its size is still counted (it is fixed-size, so it
+ * does not mask edits), but a real commit always changes the db or WAL.
  */
 export function cursorStoreStat(path: string): { size: number; mtimeMs: number } {
-  const paths = [path, `${path}-wal`, `${path}-shm`]
   let size = 0
   let mtimeMs = 0
-  for (const candidate of paths) {
+  for (const candidate of [path, `${path}-wal`, `${path}-shm`]) {
     try {
       const info = statSync(candidate)
       size += info.size
-      if (info.mtimeMs > mtimeMs) mtimeMs = info.mtimeMs
+      const volatile = candidate.endsWith('-shm')
+      if (!volatile && info.mtimeMs > mtimeMs) mtimeMs = info.mtimeMs
     } catch {
       // Sidecar files are optional.
     }
@@ -209,8 +257,7 @@ export function summarizeCursorStore(storePath: string): {
   startedAt?: number
 } {
   const sidecar = readSidecarMeta(storePath)
-  const { blobs, rootId, storeMeta } = loadBlobs(storePath)
-  const records = orderedRecords(blobs, rootId)
+  const storeMeta = loadStoreMeta(storePath)
 
   let cwd: string | undefined
   if (typeof sidecar?.cwd === 'string') cwd = sidecar.cwd
@@ -221,24 +268,9 @@ export function summarizeCursorStore(storePath: string): {
   const storeName = typeof storeMeta?.name === 'string' ? storeMeta.name.trim() : undefined
   if (!title && storeName && storeName !== 'New Agent') title = storeName
 
-  if (!title) {
-    for (const record of records) {
-      if (record.role !== 'user' || !isRecord(record.message)) continue
-      const content = record.message.content
-      const texts: string[] = []
-      if (Array.isArray(content)) {
-        for (const part of content) {
-          if (isRecord(part) && typeof part.text === 'string') texts.push(part.text)
-        }
-      }
-      const text = texts.join('\n')
-      const query = extractUserQuery(text)
-      const candidate = (query ?? text).replace(/\s+/g, ' ').trim()
-      if (!candidate || candidate.startsWith('<')) continue
-      title = candidate.length > 120 ? `${candidate.slice(0, 120)}…` : candidate
-      break
-    }
-  }
+  // Deriving a title from the transcript means decoding every blob, so only do
+  // it when the store carries no usable name of its own.
+  if (!title) title = titleFromStoreBlobs(storePath)
 
   const created =
     typeof storeMeta?.createdAt === 'number'
@@ -248,4 +280,32 @@ export function summarizeCursorStore(storePath: string): {
         : undefined
 
   return { cwd, title, startedAt: created }
+}
+
+/** First real user message in a store, used only as a title fallback. */
+function titleFromStoreBlobs(storePath: string): string | undefined {
+  let records: Record<string, unknown>[]
+  try {
+    records = cursorStoreRecords(storePath)
+  } catch {
+    return undefined
+  }
+
+  for (const record of records) {
+    if (record.role !== 'user' || !isRecord(record.message)) continue
+    const content = record.message.content
+    const texts: string[] = []
+    if (Array.isArray(content)) {
+      for (const part of content) {
+        if (isRecord(part) && typeof part.text === 'string') texts.push(part.text)
+      }
+    }
+    const text = texts.join('\n')
+    const query = extractUserQuery(text)
+    const candidate = (query ?? text).replace(/\s+/g, ' ').trim()
+    if (!candidate || candidate.startsWith('<')) continue
+    return candidate.length > 120 ? `${candidate.slice(0, 120)}…` : candidate
+  }
+
+  return undefined
 }

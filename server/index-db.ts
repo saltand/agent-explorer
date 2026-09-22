@@ -2,7 +2,13 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { extractMessages } from './extract'
-import { streamSessionLines, type SessionSummary } from './scan'
+import { isCursorStorePath } from './cursor-store'
+import {
+  streamLinesWithOffsets,
+  streamSessionLines,
+  type OffsetLine,
+  type SessionSummary,
+} from './scan'
 
 export interface SearchHit {
   sessionId: string
@@ -101,7 +107,10 @@ export class SessionIndex {
         started_at real,
         ended_at real,
         indexed_size integer not null default 0,
-        indexed_mtime_ms real not null default 0
+        indexed_mtime_ms real not null default 0,
+        indexed_bytes integer not null default 0,
+        indexed_lines integer not null default 0,
+        head_signature text
       );
 
       create index if not exists sessions_mtime on sessions (mtime_ms desc);
@@ -123,6 +132,22 @@ export class SessionIndex {
         tokenize='trigram'
       );
     `)
+
+    // Older databases predate the incremental-append columns.
+    const columns = new Set(
+      asRows<{ name: string }>(this.#db.prepare('pragma table_info(sessions)').all()).map(
+        (row) => row.name,
+      ),
+    )
+    if (!columns.has('indexed_bytes')) {
+      this.#db.exec('alter table sessions add column indexed_bytes integer not null default 0')
+    }
+    if (!columns.has('indexed_lines')) {
+      this.#db.exec('alter table sessions add column indexed_lines integer not null default 0')
+    }
+    if (!columns.has('head_signature')) {
+      this.#db.exec('alter table sessions add column head_signature text')
+    }
   }
 
   close(): void {
@@ -165,6 +190,29 @@ export class SessionIndex {
     return row!.id
   }
 
+  /**
+   * Snapshot of every indexed session keyed by path, including the size/mtime
+   * of the last index pass. A rescan uses this to skip re-probing files that
+   * have not changed, which is the bulk of startup work on a large history.
+   */
+  indexedSnapshot(): Map<string, { summary: SessionSummary; indexedSize: number; indexedMtimeMs: number }> {
+    const rows = asRows<SessionRow & { indexed_size: number; indexed_mtime_ms: number }>(
+      this.#db.prepare('select * from sessions').all(),
+    )
+    const map = new Map<
+      string,
+      { summary: SessionSummary; indexedSize: number; indexedMtimeMs: number }
+    >()
+    for (const row of rows) {
+      map.set(row.path, {
+        summary: rowToSummary(row),
+        indexedSize: row.indexed_size,
+        indexedMtimeMs: row.indexed_mtime_ms,
+      })
+    }
+    return map
+  }
+
   /** True when the session is already present in the index. */
   hasSession(sessionId: string): boolean {
     return (
@@ -188,10 +236,39 @@ export class SessionIndex {
     return row.indexed_size !== summary.size || row.indexed_mtime_ms !== summary.mtimeMs
   }
 
-  /** Reads a session's messages into the index, replacing any previous rows. */
+  /**
+   * Reads a session's messages into the index.
+   *
+   * Live sessions grow by appending, so when the already-indexed prefix is
+   * still intact only the new tail is parsed. Anything else (rewrite, truncate,
+   * Cursor's SQLite stores) falls back to a full reindex.
+   */
   async indexSession(summary: SessionSummary): Promise<number> {
+    const previous = asRow<{
+      id: number
+      indexed_bytes: number
+      indexed_lines: number
+      head_signature: string | null
+    }>(
+      this.#db
+        .prepare(
+          'select id, indexed_bytes, indexed_lines, head_signature from sessions where session_id = ?',
+        )
+        .get(summary.id),
+    )
+
+    const canAppend =
+      previous !== undefined &&
+      !isCursorStorePath(summary.path) &&
+      previous.indexed_bytes > 0 &&
+      previous.head_signature !== null &&
+      summary.size >= previous.indexed_bytes &&
+      (await this.#headSignature(summary.path)) === previous.head_signature
+
     const sessionPk = this.upsertSession(summary)
-    this.#deleteMessages(sessionPk)
+    const startOffset = canAppend ? previous.indexed_bytes : 0
+    const startLine = canAppend ? previous.indexed_lines : 0
+    if (!canAppend) this.#deleteMessages(sessionPk)
 
     const insertMessage = this.#db.prepare(
       'insert into messages (session_pk, line_index, role, body) values (?, ?, ?, ?)',
@@ -200,13 +277,36 @@ export class SessionIndex {
       'insert into messages_fts (rowid, body) values (?, ?)',
     )
 
-    let lineIndex = 0
+    let lineIndex = startLine
     let count = 0
+    let committedBytes = startOffset
+    let committedLines = startLine
+
+    // Cursor stores are converted wholesale and have no byte offsets, so they
+    // always take the simple full-reindex iterator.
+    const cursorStore = isCursorStorePath(summary.path)
+    const lines: AsyncIterable<OffsetLine> = cursorStore
+      ? mapToOffsetLines(streamSessionLines(summary.path))
+      : streamLinesWithOffsets(summary.path, startOffset)
+
     this.#db.exec('begin')
     try {
-      for await (const line of streamSessionLines(summary.path)) {
+      for await (const { line, endOffset } of lines) {
         const currentLine = lineIndex
+
+        // A tail without a trailing newline is a partially flushed write. Stop
+        // before it and leave the checkpoint where it is; the next pass picks
+        // the line up once it is complete. Indexing it now would duplicate the
+        // row when the rest arrives.
+        const complete = cursorStore || endOffset > committedBytes
+        if (!complete) break
+
         lineIndex += 1
+        if (!cursorStore) {
+          committedBytes = endOffset
+          committedLines = lineIndex
+        }
+
         if (!line.trim()) continue
 
         let record: unknown
@@ -228,8 +328,17 @@ export class SessionIndex {
       }
 
       this.#db
-        .prepare('update sessions set indexed_size = ?, indexed_mtime_ms = ? where id = ?')
-        .run(summary.size, summary.mtimeMs, sessionPk)
+        .prepare(
+          'update sessions set indexed_size = ?, indexed_mtime_ms = ?, indexed_bytes = ?, indexed_lines = ?, head_signature = ? where id = ?',
+        )
+        .run(
+          summary.size,
+          summary.mtimeMs,
+          committedBytes,
+          committedLines,
+          canAppend ? previous.head_signature : await this.#headSignature(summary.path),
+          sessionPk,
+        )
       this.#db.exec('commit')
     } catch (error) {
       this.#db.exec('rollback')
@@ -237,6 +346,18 @@ export class SessionIndex {
     }
 
     return count
+  }
+
+  /**
+   * Fingerprints the first line of a session file. If this changes, the file was
+   * rewritten rather than appended to and the existing rows are stale.
+   */
+  async #headSignature(path: string): Promise<string | null> {
+    if (isCursorStorePath(path)) return null
+    for await (const { line } of streamLinesWithOffsets(path, 0)) {
+      return `${line.length}:${line.slice(0, 200)}`
+    }
+    return ''
   }
 
   #deleteMessages(sessionPk: number): void {
@@ -391,4 +512,11 @@ function rowToSummary(row: SessionRow): SessionSummary {
     startedAt: row.started_at ?? undefined,
     endedAt: row.ended_at ?? undefined,
   }
+}
+
+/** Adapts a plain line stream to the offset-carrying shape. */
+async function* mapToOffsetLines(
+  source: AsyncIterable<string>,
+): AsyncIterable<OffsetLine> {
+  for await (const line of source) yield { line, endOffset: 0 }
 }

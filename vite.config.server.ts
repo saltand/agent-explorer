@@ -25,7 +25,7 @@ function bundleClientAssets(): Plugin {
 
 /**
  * Bundles the CLI into a single ESM file with no runtime dependencies, so
- * `npx agent-explorer` never triggers a native build step.
+ * `npx @saltand/agent-explorer` never triggers a native build step.
  */
 export default defineConfig({
   plugins: [bundleClientAssets()],

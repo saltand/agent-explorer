@@ -2,12 +2,12 @@
 
 A browser-based explorer for agent session logs. Open a JSONL file and browse the full session across three linked views: a chronological timeline, a conversation view, and an event detail inspector.
 
-Run `npx agent-explorer` to browse every session already on your machine, or open the static build and drop in a file by hand. Either way parsing stays local — nothing is uploaded.
+Run `npx @saltand/agent-explorer` to browse every session already on your machine, or open the static build and drop in a file by hand. Either way parsing stays local — nothing is uploaded.
 
 ## Quick start
 
 ```bash
-npx agent-explorer
+npx @saltand/agent-explorer
 ```
 
 This starts a local server on `127.0.0.1`, indexes the session logs it finds under your home directory, and opens the app in your browser. The first run of a large history takes a few seconds; later runs only index files that changed.
@@ -26,7 +26,7 @@ This starts a local server on `127.0.0.1`, indexes the session logs it finds und
 ## CLI
 
 ```
-npx agent-explorer [options]
+npx @saltand/agent-explorer [options]
 
   -p, --port <n>          Port to listen on (default 4317, falls back if busy)
   -H, --host <host>       Host to bind (default 127.0.0.1)
