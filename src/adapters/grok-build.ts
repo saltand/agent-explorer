@@ -1,4 +1,5 @@
 import { truncateBlockText, truncatePreview } from '../core/text'
+import { normalizeTokenUsage } from '../core/tokenUsage'
 import type {
   ContentBlock,
   ConversationListItem,
@@ -7,6 +8,7 @@ import type {
   ExplorerSession,
   ParsedLine,
   TimelineEvent,
+  TokenUsage,
 } from '../core/types'
 import type { SessionAdapter } from './types'
 
@@ -68,6 +70,25 @@ function extractContentText(content: unknown): string {
 function userFacingText(content: unknown): string {
   const text = extractContentText(content)
   return extractUserQuery(text) ?? text
+}
+
+/**
+ * Grok's `inputTokens` already includes cache reads and writes, so it maps to
+ * `totalInputTokens` and the shared normalizer derives ordinary input.
+ */
+function parseGrokTokenUsage(record: Record<string, unknown>): TokenUsage | undefined {
+  if (!isRecord(record.usage)) return undefined
+  return normalizeTokenUsage(record.usage, {
+    path: 'usage',
+    fields: {
+      totalInputTokens: 'inputTokens',
+      cacheReadInputTokens: 'cachedReadTokens',
+      cacheCreationInputTokens: 'cacheCreationTokens',
+      outputTokens: 'outputTokens',
+      reasoningOutputTokens: 'reasoningTokens',
+    },
+    outputIncludesReasoning: true,
+  })
 }
 
 function isScaffoldingUser(content: unknown): boolean {
@@ -134,6 +155,7 @@ function eventCategory(type: string, record: Record<string, unknown>): EventCate
   if (type === 'reasoning') return 'thinking'
   if (type === 'tool_result') return 'tool'
   if (type === 'system') return 'system'
+  if (type === 'turn_completed') return 'meta'
   return 'unknown'
 }
 
@@ -158,6 +180,13 @@ function eventPreview(type: string, record: Record<string, unknown>, blocks: Con
   if (type === 'reasoning') return truncatePreview(reasoningText(record))
   if (type === 'tool_result') return truncatePreview(extractContentText(record.content))
   if (type === 'system') return truncatePreview(extractContentText(record.content))
+  if (type === 'turn_completed') {
+    const usage = isRecord(record.usage) ? record.usage : undefined
+    const total = usage && typeof usage.totalTokens === 'number' ? usage.totalTokens : undefined
+    const stop = getString(record, 'stop_reason')
+    const parts = [total === undefined ? undefined : `${total.toLocaleString()} tokens`, stop]
+    return truncatePreview(parts.filter(Boolean).join(' · '))
+  }
   return ''
 }
 
@@ -170,6 +199,11 @@ export const grokBuildAdapter: SessionAdapter = {
       // Claude / Pi / Cursor nest the payload under `message`.
       if (isRecord(sample.data.message)) continue
       const type = getString(sample.data, 'type')
+      // Turn usage records are spliced in from the sibling updates.jsonl.
+      if (type === 'turn_completed' && isRecord(sample.data.usage)) {
+        hits += 1
+        continue
+      }
       if (!type || !GROK_TYPES.has(type)) continue
       if (type === 'reasoning' || type === 'tool_result' || Array.isArray(sample.data.tool_calls)) {
         hits += 1
@@ -208,6 +242,7 @@ export const grokBuildAdapter: SessionAdapter = {
         model: getString(record, 'model_id') ?? model,
         uuid: getString(record, 'id') ?? getString(record, 'tool_call_id'),
         role: type === 'tool_result' ? 'tool' : type,
+        usage: type === 'turn_completed' ? parseGrokTokenUsage(record) : undefined,
         raw: record,
       }
 

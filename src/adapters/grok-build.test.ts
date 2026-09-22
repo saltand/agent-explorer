@@ -44,7 +44,7 @@ describe('grokBuildAdapter.parse', () => {
     expect(session.fileType).toBe('Grok Build')
     expect(session.meta).toMatchObject({
       model: 'grok-4.6',
-      eventCount: 7,
+      eventCount: 8,
       turnCount: 1,
     })
     expect(session.conversationItems.map((item) => item.role)).toEqual([
@@ -62,6 +62,24 @@ describe('grokBuildAdapter.parse', () => {
       toolInput: { command: 'ls' },
     })
     expect(session.events.some((event) => event.label === 'system_reminder')).toBe(true)
+  })
+})
+
+describe('Grok turn_completed usage', () => {
+  it('maps spliced turn counts and derives ordinary input', () => {
+    const session = grokBuildAdapter.parse(parseJsonlText(sampleText).lines, 'chat_history.jsonl')
+    const event = session.events.find((item) => item.kind === 'turn_completed')
+    expect(event?.category).toBe('meta')
+    expect(event?.preview).toContain('24,147 tokens')
+    // inputTokens is inclusive, so it becomes the total and input is derived.
+    expect(event?.usage?.totalInputTokens).toBe(24010)
+    expect(event?.usage?.cacheReadInputTokens).toBe(7040)
+    expect(event?.usage?.cacheCreationInputTokens).toBe(0)
+    expect(event?.usage?.inputTokens).toBe(16970)
+    expect(event?.usage?.outputTokens).toBe(137)
+    expect(event?.usage?.reasoningOutputTokens).toBe(119)
+    expect(event?.usage?.contentOutputTokens).toBe(18)
+    expect(event?.usage?.issues).toEqual([])
   })
 })
 

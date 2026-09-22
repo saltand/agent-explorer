@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { AGENT_LABELS, isIndexedSessionFile, resolveOwningRoot, type AgentRoot } from './agents'
 import { cursorStoreToJsonl, isCursorStorePath } from './cursor-store'
+import { grokHistoryToJsonl, isGrokHistoryPath } from './grok-usage'
 import { SessionIndex } from './index-db'
 import { pathForSessionId, scanSessions, summarizeOne, type SessionSummary } from './scan'
 import { SessionWatcher } from './watch'
@@ -263,10 +264,12 @@ export function createAppServer(options: ServerOptions) {
           return
         }
 
-        if (isCursorStorePath(filePath)) {
+        if (isCursorStorePath(filePath) || isGrokHistoryPath(filePath)) {
           let jsonl: string
           try {
-            jsonl = cursorStoreToJsonl(filePath)
+            jsonl = isCursorStorePath(filePath)
+              ? cursorStoreToJsonl(filePath)
+              : grokHistoryToJsonl(filePath)
           } catch {
             sendJson(response, 404, { error: 'Session file is no longer available' })
             return

@@ -5,3 +5,4 @@
 {"type":"tool_result","tool_call_id":"call-1","content":"README.md\nsrc"}
 {"type":"assistant","content":"The project has a README.","model_id":"grok-4.6"}
 {"type":"user","content":[{"type":"text","text":"<system-reminder>\nAvailable skills\n</system-reminder>"}],"synthetic_reason":"system_reminder"}
+{"type":"turn_completed","prompt_index":0,"prompt_id":"p-1","stop_reason":"end_turn","elapsed_ms":9120,"usage":{"inputTokens":24010,"outputTokens":137,"totalTokens":24147,"cachedReadTokens":7040,"cacheCreationTokens":0,"reasoningTokens":119,"modelCalls":2,"apiDurationMs":4310,"costUsdTicks":1485822,"numTurns":2},"timestamp":1788369846}
