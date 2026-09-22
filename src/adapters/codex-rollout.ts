@@ -1,5 +1,6 @@
 import type { SessionAdapter } from './types'
 import { truncateBlockText, truncatePreview } from '../core/text'
+import { normalizeTokenUsage } from '../core/tokenUsage'
 import type {
   ContentBlock,
   ConversationListItem,
@@ -8,6 +9,7 @@ import type {
   ExplorerSession,
   ParsedLine,
   TimelineEvent,
+  TokenUsage,
 } from '../core/types'
 
 function parseTimestamp(value: unknown): number | undefined {
@@ -26,6 +28,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function getString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key]
   return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * Codex records cumulative and per-request counts in `token_count` events.
+ * Its `input_tokens` already covers cache reads and writes, so it maps to
+ * `totalInputTokens` and the shared normalizer derives ordinary input.
+ */
+function parseCodexTokenUsage(payload: Record<string, unknown>): TokenUsage | undefined {
+  const info = payload.info
+  if (!isRecord(info)) return undefined
+  const last = isRecord(info.last_token_usage) ? info.last_token_usage : undefined
+  const total = isRecord(info.total_token_usage) ? info.total_token_usage : undefined
+  const source = last ?? total
+  if (!source) return undefined
+  return normalizeTokenUsage(source, {
+    path: last ? 'payload.info.last_token_usage' : 'payload.info.total_token_usage',
+    fields: {
+      totalInputTokens: 'input_tokens',
+      cacheReadInputTokens: 'cached_input_tokens',
+      cacheCreationInputTokens: 'cache_write_input_tokens',
+      outputTokens: 'output_tokens',
+      reasoningOutputTokens: 'reasoning_output_tokens',
+    },
+    outputIncludesReasoning: true,
+  })
 }
 
 function extractMessageText(content: unknown): string {
@@ -104,6 +131,35 @@ function isFailedToolOutput(payload: Record<string, unknown>): boolean {
     return false
   }
   return getString(payload, 'status') === 'failed'
+}
+
+const LEGACY_RESPONSE_ITEM_TYPES = new Set([
+  'message',
+  'reasoning',
+  'function_call',
+  'function_call_output',
+  'local_shell_call',
+  'custom_tool_call',
+  'custom_tool_call_output',
+  'web_search_call',
+])
+
+/**
+ * Rollouts written before the envelope format stored response items at the top
+ * level and the session header as a bare `{ id, timestamp, instructions }` line.
+ * Wrapping them here lets one parser handle both layouts.
+ */
+function normalizeLegacyLine(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (isRecord(record.payload)) return record
+
+  const type = getString(record, 'type')
+  if (type !== undefined && LEGACY_RESPONSE_ITEM_TYPES.has(type)) {
+    return { type: 'response_item', timestamp: record.timestamp, payload: record }
+  }
+  if (type === undefined && getString(record, 'id') && 'instructions' in record) {
+    return { type: 'session_meta', timestamp: record.timestamp, payload: record }
+  }
+  return undefined
 }
 
 function responseItemType(payload: Record<string, unknown>): string {
@@ -283,10 +339,17 @@ export const codexRolloutAdapter: SessionAdapter = {
   detect(samples: ParsedLine[]): number {
     if (samples.length === 0) return 0
     let hits = 0
+    let considered = 0
     for (const sample of samples) {
       if (!isRecord(sample.data)) continue
-      const type = getString(sample.data, 'type')
-      const payload = sample.data.payload
+      // Legacy rollouts interleave `record_type` bookkeeping lines that carry no
+      // conversation payload, so they must not dilute the confidence score.
+      if ('record_type' in sample.data && getString(sample.data, 'type') === undefined) continue
+      considered += 1
+      const normalized = normalizeLegacyLine(sample.data)
+      if (normalized === undefined) continue
+      const type = getString(normalized, 'type')
+      const payload = normalized.payload
       if (
         (type === 'session_meta' ||
           type === 'event_msg' ||
@@ -297,7 +360,8 @@ export const codexRolloutAdapter: SessionAdapter = {
         hits++
       }
     }
-    return hits / samples.length
+    if (considered === 0) return 0
+    return hits / considered
   },
 
   parse(lines: ParsedLine[], fileName: string): ExplorerSession {
@@ -326,8 +390,9 @@ export const codexRolloutAdapter: SessionAdapter = {
     }
 
     for (const line of lines) {
-      const envelope = line.data
-      if (!isRecord(envelope)) continue
+      if (!isRecord(line.data)) continue
+      const envelope = normalizeLegacyLine(line.data)
+      if (envelope === undefined) continue
 
       const envelopeType = getString(envelope, 'type') ?? 'unknown'
       const payload = envelope.payload
@@ -380,7 +445,12 @@ export const codexRolloutAdapter: SessionAdapter = {
             : undefined,
         timestampLabel: getString(envelope, 'timestamp'),
         role: messageRole,
-        raw: envelope,
+        usage:
+          envelopeType === 'event_msg' && getString(payload, 'type') === 'token_count'
+            ? parseCodexTokenUsage(payload)
+            : undefined,
+        // Keep the file's original line so Raw JSON never shows the legacy wrapper.
+        raw: line.data,
       }
 
       if (envelopeType === 'response_item' && itemType) {

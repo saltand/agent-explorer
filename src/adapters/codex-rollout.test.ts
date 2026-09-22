@@ -20,6 +20,65 @@ function line(data: Record<string, unknown>, lineIndex = 1) {
   }
 }
 
+describe('codexRolloutAdapter with legacy flat rollouts', () => {
+  const legacy = [
+    { id: 'sess-1', timestamp: '2025-09-10T06:56:22.662Z', instructions: null },
+    { record_type: 'state' },
+    {
+      type: 'message',
+      role: 'user',
+      content: [{ type: 'input_text', text: 'hello legacy' }],
+    },
+    {
+      type: 'reasoning',
+      summary: [{ type: 'summary_text', text: 'thinking about it' }],
+    },
+    {
+      type: 'function_call',
+      name: 'shell',
+      arguments: '{"command":["ls"]}',
+      call_id: 'call-1',
+    },
+  ]
+
+  const text = legacy.map((entry) => JSON.stringify(entry)).join('\n')
+
+  it('detects rollouts written without the payload envelope', () => {
+    const { lines } = parseJsonlText(text)
+    expect(codexRolloutAdapter.detect(lines)).toBeGreaterThanOrEqual(0.5)
+  })
+
+  it('ignores record_type bookkeeping lines when scoring confidence', () => {
+    const sparse = [
+      { id: 'sess-2', timestamp: '2025-08-22T11:48:18.878Z', instructions: null },
+      { record_type: 'state' },
+      { type: 'message', id: null, role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+      { record_type: 'state' },
+      { record_type: 'state' },
+      { record_type: 'state' },
+    ]
+    const sparseText = sparse.map((entry) => JSON.stringify(entry)).join('\n')
+    const { lines } = parseJsonlText(sparseText)
+    expect(codexRolloutAdapter.detect(lines)).toBe(1)
+    expect(detectAndParse(sparseText, 'rollout-sparse.jsonl').fileType).toBe('Codex')
+  })
+
+  it('parses legacy lines and keeps the original line in raw', () => {
+    const session = detectAndParse(text, 'rollout-legacy.jsonl')
+    expect(session.fileType).toBe('Codex')
+    expect(session.meta.sessionId).toBe('sess-1')
+
+    const kinds = session.events.map((event) => event.kind)
+    expect(kinds).toContain('message')
+    expect(kinds).toContain('reasoning')
+    expect(kinds).toContain('function_call')
+
+    const message = session.events.find((event) => event.kind === 'message')
+    expect(message?.raw).not.toHaveProperty('payload')
+    expect(message?.raw).toMatchObject({ type: 'message', role: 'user' })
+  })
+})
+
 describe('codexRolloutAdapter.detect', () => {
   it('returns high confidence for Codex rollout samples', () => {
     const { lines } = parseJsonlText(sampleText)
@@ -208,6 +267,25 @@ describe('codexRolloutAdapter.parse', () => {
     expect(session.conversationItems.some((item) => item.role === 'tool_call')).toBe(true)
     expect(session.conversationItems.some((item) => item.role === 'tool_result')).toBe(true)
     expect(session.conversationItems.some((item) => item.role === 'thinking')).toBe(true)
+  })
+})
+
+describe('Codex token_count usage', () => {
+  it('maps per-request counts and derives ordinary input', () => {
+    const session = codexRolloutAdapter.parse(parseJsonlText(sampleText).lines, 'rollout.jsonl')
+    const usage = session.events.find((event) => event.kind === 'token_count')?.usage
+    expect(usage).toBeDefined()
+    // input_tokens is inclusive, so it becomes the total and input is derived.
+    expect(usage?.totalInputTokens).toBe(24010)
+    expect(usage?.cacheReadInputTokens).toBe(7040)
+    expect(usage?.inputTokens).toBeUndefined()
+    expect(usage?.outputTokens).toBe(137)
+    expect(usage?.reasoningOutputTokens).toBe(119)
+    expect(usage?.contentOutputTokens).toBe(18)
+    expect(usage?.issues).toEqual([])
+    expect(usage?.sources.totalInputTokens).toEqual([
+      'payload.info.last_token_usage.input_tokens',
+    ])
   })
 })
 
