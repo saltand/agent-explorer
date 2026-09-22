@@ -1,7 +1,9 @@
-import { useRef, useEffect, useMemo } from 'react'
+import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { emptyState, panelHeader } from '../../styles/uiClasses'
 import { filterConversationItems } from '../../core/filter'
+import { buildConversationRows, listTurnIndexes, type ConversationRow } from '../../core/conversationRows'
 import { useSessionStore } from '../../store/sessionStore'
 import { useSettingsStore } from '../../store/settingsStore'
 import type { ConversationListItem } from '../../core/types'
@@ -10,12 +12,8 @@ import { ConversationMessage } from './ConversationMessage'
 
 const EMPTY_ITEMS: ConversationListItem[] = []
 
-type VirtualRow =
-  | { kind: 'turn'; turnIndex: number; key: string }
-  | { kind: 'item'; key: string; itemIndex: number }
-
 function estimateRowSize(
-  row: VirtualRow | undefined,
+  row: ConversationRow | undefined,
   items: ConversationListItem[],
 ): number {
   if (!row) return 64
@@ -94,19 +92,34 @@ export function ConversationPanel() {
     [items, selectedItemId],
   )
 
-  const rows: VirtualRow[] = useMemo(() => {
-    const result: VirtualRow[] = []
-    let lastTurn = -1
-    items.forEach((item, itemIndex) => {
-      const turnIndex = item.event?.turnIndex ?? 0
-      if (turnIndex !== lastTurn) {
-        result.push({ kind: 'turn', turnIndex, key: `turn-${turnIndex}` })
-        lastTurn = turnIndex
-      }
-      result.push({ kind: 'item', key: item.id, itemIndex })
+  // Turn collapse is transient view state, reset whenever the session changes.
+  const [collapsedTurns, setCollapsedTurns] = useState<Set<number>>(() => new Set())
+  useEffect(() => {
+    setCollapsedTurns(new Set())
+  }, [session])
+
+  const turnIndexes = useMemo(() => listTurnIndexes(items), [items])
+  const allCollapsed = turnIndexes.length > 0 && turnIndexes.every((t) => collapsedTurns.has(t))
+
+  const toggleTurn = useCallback((turnIndex: number) => {
+    setCollapsedTurns((prev) => {
+      const next = new Set(prev)
+      if (next.has(turnIndex)) next.delete(turnIndex)
+      else next.add(turnIndex)
+      return next
     })
-    return result
-  }, [items])
+  }, [])
+
+  const toggleAll = useCallback(() => {
+    setCollapsedTurns((prev) =>
+      turnIndexes.every((t) => prev.has(t)) ? new Set() : new Set(turnIndexes),
+    )
+  }, [turnIndexes])
+
+  const rows = useMemo(
+    () => buildConversationRows(items, collapsedTurns),
+    [items, collapsedTurns],
+  )
 
   const scrollToFn = useSpringScrollToFn()
   const virtualizer = useVirtualizer({
@@ -123,11 +136,22 @@ export function ConversationPanel() {
       return
     }
     if (!selectedItemId) return
+    // A revealed item may sit in a collapsed turn; open it so the item is found.
+    const selectedItem = items.find((item) => item.id === selectedItemId)
+    const selectedTurn = selectedItem?.event?.turnIndex ?? 0
+    if (selectedItem && collapsedTurns.has(selectedTurn)) {
+      setCollapsedTurns((prev) => {
+        const next = new Set(prev)
+        next.delete(selectedTurn)
+        return next
+      })
+      return
+    }
     const index = rows.findIndex(
       (row) => row.kind === 'item' && items[row.itemIndex]?.id === selectedItemId,
     )
     if (index >= 0) virtualizer.scrollToIndex(index, { align: 'start', behavior: 'smooth' })
-  }, [selection, selectedItemId, rows, items, virtualizer])
+  }, [selection, selectedItemId, rows, items, virtualizer, collapsedTurns])
 
   if (!session) {
     return (
@@ -160,10 +184,21 @@ export function ConversationPanel() {
 
   return (
     <div className="flex h-full flex-col bg-under-page-background">
-      <div className={panelHeader}>
-        Conversation · {items.length}
-        {items.length !== allItems.length ? ` / ${allItems.length}` : ''} messages ·{' '}
-        {session.meta.turnCount} turns
+      <div className={`flex items-center justify-between ${panelHeader}`}>
+        <span>
+          Conversation · {items.length}
+          {items.length !== allItems.length ? ` / ${allItems.length}` : ''} messages ·{' '}
+          {session.meta.turnCount} turns
+        </span>
+        {turnIndexes.length > 1 && (
+          <button
+            type="button"
+            onClick={toggleAll}
+            className="rounded px-2 py-0.5 text-[11px] font-medium text-secondary hover:bg-overlay hover:text-primary"
+          >
+            {allCollapsed ? 'Expand all' : 'Collapse all'}
+          </button>
+        )}
       </div>
       <div ref={parentRef} className="flex-1 overflow-auto py-3">
         <div
@@ -185,13 +220,25 @@ export function ConversationPanel() {
                 }}
               >
                 {row.kind === 'turn' ? (
-                  <div className="flex items-center gap-3 px-4 py-3">
-                    <div className={`h-px flex-1 bg-separator`} />
+                  <button
+                    type="button"
+                    onClick={() => toggleTurn(row.turnIndex)}
+                    className="flex w-full items-center gap-2 px-4 py-3 text-left hover:bg-overlay"
+                    aria-expanded={!row.collapsed}
+                  >
+                    {row.collapsed ? (
+                      <ChevronRight className="h-3 w-3 text-tertiary" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3 text-tertiary" />
+                    )}
                     <span className="text-[10px] font-semibold uppercase tracking-widest text-tertiary">
                       Turn {row.turnIndex}
                     </span>
-                    <div className={`h-px flex-1 bg-separator`} />
-                  </div>
+                    <div className="h-px flex-1 bg-separator" />
+                    {row.collapsed && (
+                      <span className="text-[10px] text-tertiary">{row.itemCount} hidden</span>
+                    )}
+                  </button>
                 ) : (
                   <ConversationMessage
                     item={items[row.itemIndex]!}
