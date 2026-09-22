@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractMessages } from './extract'
+import { extractMessages, isDeadRecordLine } from './extract'
 
 describe('extractMessages', () => {
   it('extracts Claude user text from message.content', () => {
@@ -136,5 +136,45 @@ describe('extractMessages', () => {
     expect(extractMessages(null)).toEqual([])
     expect(extractMessages('nope')).toEqual([])
     expect(extractMessages({ type: 'session', id: 'x' })).toEqual([])
+  })
+})
+
+describe('isDeadRecordLine', () => {
+  const dead = [
+    '{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"item_completed"}}',
+    '{"type":"response_item","payload":{"type":"function_call_output","output":"x"}}',
+    '{"type":"response_item","payload":{"type":"custom_tool_call_output","output":"x"}}',
+    '{"type":"tool_result","content":"x"}',
+  ]
+
+  it('rejects tool and lifecycle records without parsing', () => {
+    for (const line of dead) expect(isDeadRecordLine(line)).toBe(true)
+  })
+
+  it('agrees with extractMessages on every line it rejects', () => {
+    for (const line of dead) expect(extractMessages(JSON.parse(line))).toEqual([])
+  })
+
+  it('keeps real conversation records', () => {
+    const live = [
+      '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]}}',
+      '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"yo"}]}}',
+      '{"type":"reasoning","summary":[{"type":"summary_text","summary":"thinking"}]}',
+    ]
+    for (const line of live) expect(isDeadRecordLine(line)).toBe(false)
+  })
+
+  it('does not match a marker quoted inside message text', () => {
+    const line = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'text', text: 'what does {"type":"event_msg"} mean?' }] },
+    })
+    expect(isDeadRecordLine(line)).toBe(false)
+    expect(extractMessages(JSON.parse(line))).toHaveLength(1)
+  })
+
+  it('ignores markers past the head window', () => {
+    const padded = `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"${'a'.repeat(500)}"}]}}`
+    expect(isDeadRecordLine(padded)).toBe(false)
   })
 })

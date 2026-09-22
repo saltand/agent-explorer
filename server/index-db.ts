@@ -1,7 +1,7 @@
 import { DatabaseSync } from 'node:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { extractMessages } from './extract'
+import { extractMessages, isDeadRecordLine } from './extract'
 import { isCursorStorePath } from './cursor-store'
 import {
   streamLinesWithOffsets,
@@ -89,6 +89,9 @@ export class SessionIndex {
     this.#db = new DatabaseSync(dbPath)
     this.#db.exec('pragma journal_mode = wal')
     this.#db.exec('pragma synchronous = normal')
+    // Trigram FTS writes touch many pages per insert; a larger page cache keeps
+    // the index build from thrashing. Negative values are KiB, so this is 64 MiB.
+    this.#db.exec('pragma cache_size = -65536')
     this.#migrate()
   }
 
@@ -308,6 +311,11 @@ export class SessionIndex {
         }
 
         if (!line.trim()) continue
+
+        // Tool output and lifecycle events are most of the bytes and none of the
+        // messages. Rejecting them as text keeps JSON.parse off that volume; the
+        // checkpoint above is already updated, so skipping here is safe.
+        if (isDeadRecordLine(line)) continue
 
         let record: unknown
         try {
