@@ -7,6 +7,7 @@ import {
 } from '../../styles/uiClasses'
 import { useSessionStore } from '../../store/sessionStore'
 import { CollapsibleJson } from './CollapsibleJson'
+import { ContextPanel } from './ContextPanel'
 import { EventSummary } from './EventSummary'
 import { RequestMetricsPanel } from './RequestMetricsPanel'
 import { SessionMetaPanel } from './SessionMetaPanel'
@@ -76,7 +77,14 @@ export function DetailPanel() {
         </TabButton>
       </div>
       <div className="flex-1 overflow-auto p-3">
-        {tab === 'session' && <SessionMetaPanel session={session} />}
+        {tab === 'session' && (
+          <div className="flex flex-col gap-4">
+            <SessionMetaPanel session={session} />
+            <UsageSection title="Context & compactions">
+              <ContextPanel session={session} />
+            </UsageSection>
+          </div>
+        )}
         {tab === 'summary' && (hasEvent || hasToolCall) && (
           <div className="flex flex-col gap-3">
             <ToolCallInspector session={session} selection={selection} />
