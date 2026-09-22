@@ -1,6 +1,6 @@
 {
   "name": "@saltand/agent-explorer",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "description": "Browse and search local agent session logs (Claude Code, Codex, Pi, Cursor Agent, Grok Build) in your browser",
   "license": "MIT",
