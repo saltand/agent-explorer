@@ -11,6 +11,8 @@ import { EventSummary } from './EventSummary'
 import { SessionMetaPanel } from './SessionMetaPanel'
 import { SessionTurnsPanel } from './SessionTurnsPanel'
 import { SessionUsagePanel } from './SessionUsagePanel'
+import { ToolCallInspector } from './ToolCallInspector'
+import { selectedToolItem } from '../../core/toolCalls'
 import { UsagePanel } from './UsagePanel'
 
 type DetailTab = 'session' | 'summary' | 'usage' | 'raw'
@@ -24,11 +26,12 @@ export function DetailPanel() {
   const selectedEventId = selection?.event?.id
   const hasEvent = !!(selection?.event)
   const hasUsage = !!(selection?.event?.usage)
+  const hasToolCall = !!(selection && selectedToolItem(selection))
 
   // FIXME: we don't need these `useEffect` hooks maybe.
   useEffect(() => {
     setLastSelectedEventId(selectedEventId)
-    if (hasEvent) {
+    if (hasEvent || hasToolCall) {
       if (tab === 'session' && lastSelectedEventId !== selectedEventId) {
         setTab('summary');
       }
@@ -37,7 +40,7 @@ export function DetailPanel() {
         setTab('session')
       }
     }
-  }, [lastSelectedEventId, setLastSelectedEventId, tab, selectedEventId, hasEvent])
+  }, [lastSelectedEventId, setLastSelectedEventId, tab, selectedEventId, hasEvent, hasToolCall])
 
   if (!session) {
     return (
@@ -56,7 +59,7 @@ export function DetailPanel() {
         <TabButton
           active={tab === 'summary'}
           onClick={() => setTab('summary')}
-          disabled={!hasEvent}
+          disabled={!hasEvent && !hasToolCall}
         >
           Summary
         </TabButton>
@@ -73,7 +76,12 @@ export function DetailPanel() {
       </div>
       <div className="flex-1 overflow-auto p-3">
         {tab === 'session' && <SessionMetaPanel session={session} />}
-        {tab === 'summary' && hasEvent && <EventSummary selection={selection} />}
+        {tab === 'summary' && (hasEvent || hasToolCall) && (
+          <div className="flex flex-col gap-3">
+            <ToolCallInspector session={session} selection={selection} />
+            <EventSummary selection={selection} />
+          </div>
+        )}
         {tab === 'usage' && (
           <div className="flex flex-col gap-4">
             <UsageSection title="Session total">
