@@ -47,6 +47,12 @@ function extractContentText(content: unknown): string {
       if (!isRecord(part)) return ''
       if (part.type === 'text' && typeof part.text === 'string') return part.text
       if (part.type === 'image') return '[Image]'
+      // ACP stores wrap tool output in `tool-result`; prefer the readable form.
+      if (part.type === 'tool-result' || part.type === 'tool_result') {
+        const nested = extractContentText(part.experimental_content)
+        if (nested) return nested
+        return typeof part.result === 'string' ? part.result : formatJson(part.result)
+      }
       return ''
     })
     .filter(Boolean)
@@ -85,15 +91,18 @@ function extractAssistantBlocks(content: unknown): ContentBlock[] {
         (typeof part.thinking === 'string' && part.thinking) ||
         ''
       if (text) blocks.push({ type: 'thinking', text: truncateBlockText(text) })
-    } else if (part.type === 'tool_use') {
-      const name = getString(part, 'name') ?? 'tool'
-      const input = toolInput(part.input)
+    } else if (part.type === 'tool_use' || part.type === 'tool-call') {
+      // ACP stores record `tool-call` with `toolName`/`args`; the older shape
+      // uses `tool_use` with `name`/`input`.
+      const name = getString(part, 'name') ?? getString(part, 'toolName') ?? 'tool'
+      const rawInput = part.input ?? part.args
+      const input = toolInput(rawInput)
       blocks.push({
         type: 'tool_use',
-        text: truncateBlockText(formatJson(part.input ?? input)),
+        text: truncateBlockText(formatJson(rawInput ?? input)),
         toolName: name,
         toolInput: input,
-        toolCallId: getString(part, 'id'),
+        toolCallId: getString(part, 'id') ?? getString(part, 'toolCallId'),
         status: 'pending',
       })
     }
@@ -129,6 +138,8 @@ function eventCategory(record: Record<string, unknown>, content: unknown): Event
   return 'unknown'
 }
 
+const CURSOR_ROLES = new Set(['user', 'assistant', 'tool', 'tool_result', 'system'])
+
 export const cursorAgentAdapter: SessionAdapter = {
   detect(samples: ParsedLine[]): number {
     if (samples.length === 0) return 0
@@ -138,7 +149,9 @@ export const cursorAgentAdapter: SessionAdapter = {
       // Claude transcripts also nest `message`, but they carry a `uuid`.
       if (getString(sample.data, 'uuid')) continue
       const role = getString(sample.data, 'role')
-      if (role === 'user' || role === 'assistant') {
+      // Real transcripts are mostly `tool` and `system` rows, so all recorded
+      // roles must count or long tool runs score below the detection floor.
+      if (role !== undefined && CURSOR_ROLES.has(role)) {
         if (isRecord(sample.data.message) || 'content' in sample.data) {
           hits += 1
           continue

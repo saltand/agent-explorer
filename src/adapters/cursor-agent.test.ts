@@ -23,6 +23,18 @@ describe('cursorAgentAdapter.detect', () => {
     expect(cursorAgentAdapter.detect(lines)).toBe(1)
   })
 
+  it('detects tool-heavy transcripts where user and assistant rows are sparse', () => {
+    const samples = [
+      line({ role: 'system', message: { content: [{ type: 'text', text: 'You are an AI coding assistant' }] } }, 0),
+      line({ role: 'user', message: { content: [{ type: 'text', text: '<user_query>go</user_query>' }] } }, 1),
+      line({ role: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }, 2),
+      ...Array.from({ length: 17 }, (_, index) =>
+        line({ role: 'tool', message: { content: [{ type: 'tool-result', toolName: 'Read', result: 'x' }] } }, index + 3),
+      ),
+    ]
+    expect(cursorAgentAdapter.detect(samples)).toBe(1)
+  })
+
   it('returns zero for Claude transcripts that carry uuids', () => {
     expect(
       cursorAgentAdapter.detect([
@@ -62,6 +74,48 @@ describe('cursorAgentAdapter.parse', () => {
       category: 'meta',
       preview: 'success',
     })
+  })
+})
+
+describe('cursorAgentAdapter.parse with ACP store shapes', () => {
+  it('reads hyphenated tool-call and tool-result parts', () => {
+    const lines = [
+      line({
+        role: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'tool-call',
+              toolCallId: 'call-1',
+              toolName: 'Read',
+              args: { path: '/tmp/a.scss', limit: 40 },
+            },
+          ],
+        },
+      }, 0),
+      line({
+        role: 'tool',
+        message: {
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: 'call-1',
+              toolName: 'Read',
+              result: '@forward "./theme.scss";',
+            },
+          ],
+        },
+      }, 1),
+    ]
+
+    const session = cursorAgentAdapter.parse(lines, 'store.db')
+    const call = session.conversationItems.find((item) => item.role === 'tool_call')
+    expect(call?.block?.toolName).toBe('Read')
+    expect(call?.block?.toolCallId).toBe('call-1')
+    expect(call?.block?.toolInput).toEqual({ path: '/tmp/a.scss', limit: 40 })
+
+    const result = session.conversationItems.find((item) => item.role === 'tool_result')
+    expect(result?.block?.text).toContain('@forward "./theme.scss";')
   })
 })
 
