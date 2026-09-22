@@ -1,4 +1,5 @@
 import { truncateBlockText, truncatePreview } from '../core/text'
+import { normalizeTokenUsage } from '../core/tokenUsage'
 import type {
   ContentBlock,
   ConversationListItem,
@@ -113,28 +114,19 @@ function blockPreview(block: ContentBlock): string {
   return truncatePreview(block.text)
 }
 
-function parseUsage(message: Record<string, unknown>): TokenUsage | undefined {
+function parseUsage(message: Record<string, unknown>, path: string): TokenUsage | undefined {
   if (!isRecord(message.usage)) return undefined
-  const inputTokens = getNumber(message.usage, 'input')
-  const outputTokens = getNumber(message.usage, 'output')
-  const cacheReadInputTokens = getNumber(message.usage, 'cacheRead')
-  const cacheCreationInputTokens = getNumber(message.usage, 'cacheWrite')
-
-  if (
-    inputTokens === undefined &&
-    outputTokens === undefined &&
-    cacheReadInputTokens === undefined &&
-    cacheCreationInputTokens === undefined
-  ) {
-    return undefined
-  }
-
-  return {
-    inputTokens: inputTokens ?? 0,
-    outputTokens: outputTokens ?? 0,
-    cacheReadInputTokens: cacheReadInputTokens ?? 0,
-    cacheCreationInputTokens: cacheCreationInputTokens ?? 0,
-  }
+  return normalizeTokenUsage(message.usage, {
+    path,
+    fields: {
+      inputTokens: 'input',
+      outputTokens: 'output',
+      cacheReadInputTokens: 'cacheRead',
+      cacheCreationInputTokens: 'cacheWrite',
+      reasoningOutputTokens: 'reasoning',
+    },
+    outputIncludesReasoning: true,
+  })
 }
 
 function messageCategory(role: string | undefined): EventCategory {
@@ -427,7 +419,7 @@ export const piSessionAdapter: SessionAdapter = {
         preview: entryPreview(type, entry),
         turnIndex,
         model: type === 'model_change' ? getString(entry, 'modelId') : getString(message ?? {}, 'model') ?? model,
-        usage: parseUsage(message ?? entry),
+        usage: parseUsage(message ?? entry, message ? 'message.usage' : 'usage'),
         uuid: getString(entry, 'id'),
         sessionId: type === 'session' ? sessionId : undefined,
         cwd: type === 'session' ? cwd : undefined,

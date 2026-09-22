@@ -94,12 +94,30 @@ describe('piSessionAdapter.parse', () => {
     )
 
     expect(assistantEvent?.model).toBe('gpt-5.6-sol')
-    expect(assistantEvent?.usage).toEqual({
+    expect(assistantEvent?.usage).toMatchObject({
       inputTokens: 120,
       outputTokens: 30,
       cacheReadInputTokens: 80,
       cacheCreationInputTokens: 10,
+      totalInputTokens: 210,
+      reasoningOutputTokens: 5,
+      contentOutputTokens: 25,
+      sources: { inputTokens: ['message.usage.input'] },
+      issues: [],
     })
+  })
+
+  it('keeps missing cache usage unknown and preserves the path for entry-level usage', () => {
+    const session = piSessionAdapter.parse([
+      line({ type: 'message', message: { role: 'assistant', usage: { input: 0, output: 20 } } }),
+      line({ type: 'compaction', usage: { input: 10, output: 6, reasoning: 2 } }, 2),
+    ], 'pi.jsonl')
+    expect(session.events[0]?.usage?.inputTokens).toBe(0)
+    expect(session.events[0]?.usage?.cacheReadInputTokens).toBeUndefined()
+    expect(session.events[0]?.usage?.totalInputTokens).toBeUndefined()
+    expect(session.events[0]?.usage?.contentOutputTokens).toBeUndefined()
+    expect(session.events[1]?.usage?.contentOutputTokens).toBe(4)
+    expect(session.events[1]?.usage?.sources.reasoningOutputTokens).toEqual(['usage.reasoning'])
   })
 
   it('supports extended messages, custom entries, and image placeholders', () => {

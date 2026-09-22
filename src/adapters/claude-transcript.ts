@@ -1,4 +1,5 @@
 import type { SessionAdapter } from './types'
+import { normalizeTokenUsage } from '../core/tokenUsage'
 import {
   truncateBlockText,
   truncatePreview,
@@ -152,37 +153,21 @@ function timelinePreview(type: string, record: Record<string, unknown>): string 
   return ''
 }
 
-function readTokenCount(usage: Record<string, unknown>, key: string): number | undefined {
-  const value = usage[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
 export function parseClaudeTokenUsage(raw: unknown): TokenUsage | undefined {
   if (!isRecord(raw) || !isRecord(raw.message)) return undefined
 
   const usage = raw.message.usage
   if (!isRecord(usage)) return undefined
 
-  const inputTokens = readTokenCount(usage, 'input_tokens')
-  const outputTokens = readTokenCount(usage, 'output_tokens')
-  const cacheCreationInputTokens = readTokenCount(usage, 'cache_creation_input_tokens')
-  const cacheReadInputTokens = readTokenCount(usage, 'cache_read_input_tokens')
-
-  if (
-    inputTokens === undefined &&
-    outputTokens === undefined &&
-    cacheCreationInputTokens === undefined &&
-    cacheReadInputTokens === undefined
-  ) {
-    return undefined
-  }
-
-  return {
-    inputTokens: inputTokens ?? 0,
-    outputTokens: outputTokens ?? 0,
-    cacheCreationInputTokens: cacheCreationInputTokens ?? 0,
-    cacheReadInputTokens: cacheReadInputTokens ?? 0,
-  }
+  return normalizeTokenUsage(usage, {
+    path: 'message.usage',
+    fields: {
+      inputTokens: 'input_tokens',
+      outputTokens: 'output_tokens',
+      cacheCreationInputTokens: 'cache_creation_input_tokens',
+      cacheReadInputTokens: 'cache_read_input_tokens',
+    },
+  })
 }
 
 export function parseClaudeModel(raw: unknown): string | undefined {

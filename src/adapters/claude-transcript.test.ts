@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { detectAndParse } from '../core/registry'
 import { parseJsonlText } from '../core/jsonl'
 import { BLOCK_TEXT_LIMIT } from '../core/text'
-import { claudeTranscriptAdapter } from './claude-transcript'
+import { claudeTranscriptAdapter, parseClaudeTokenUsage } from './claude-transcript'
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures')
 const sampleText = readFileSync(
@@ -20,6 +20,24 @@ function line(data: Record<string, unknown>, lineIndex = 1) {
     data,
   }
 }
+
+describe('Claude usage normalization', () => {
+  it('preserves absent cache fields and explicit zero output', () => {
+    const usage = parseClaudeTokenUsage({ message: { usage: { input_tokens: 12, output_tokens: 0 } } })!
+    expect(usage.outputTokens).toBe(0)
+    expect(usage.cacheReadInputTokens).toBeUndefined()
+    expect(usage.cacheCreationInputTokens).toBeUndefined()
+    expect(usage.totalInputTokens).toBeUndefined()
+    expect(usage.reasoningOutputTokens).toBeUndefined()
+  })
+
+  it('retains an invalid count source for inspection', () => {
+    const usage = parseClaudeTokenUsage({ message: { usage: { input_tokens: -12, output_tokens: 0 } } })!
+    expect(usage.inputTokens).toBeUndefined()
+    expect(usage.issues).toHaveLength(1)
+    expect(usage.sources.inputTokens).toEqual(['message.usage.input_tokens'])
+  })
+})
 
 describe('claudeTranscriptAdapter.detect', () => {
   it('returns high confidence for Claude transcript samples', () => {
@@ -185,11 +203,14 @@ describe('claudeTranscriptAdapter.parse', () => {
       'test.jsonl',
     )
 
-    expect(session.events[1]?.usage).toEqual({
+    expect(session.events[1]?.usage).toMatchObject({
       inputTokens: 6,
       cacheCreationInputTokens: 30175,
       cacheReadInputTokens: 25392,
       outputTokens: 1042,
+      totalInputTokens: 55573,
+      sources: { inputTokens: ['message.usage.input_tokens'] },
+      issues: [],
     })
     expect(session.events[1]?.model).toBe('claude-opus-4-7')
     expect(session.events[1]?.uuid).toBe('asst-1')
