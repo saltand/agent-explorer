@@ -9,6 +9,7 @@ import { useSessionStore } from '../../store/sessionStore'
 import { CollapsibleJson } from './CollapsibleJson'
 import { EventSummary } from './EventSummary'
 import { SessionMetaPanel } from './SessionMetaPanel'
+import { SessionTurnsPanel } from './SessionTurnsPanel'
 import { SessionUsagePanel } from './SessionUsagePanel'
 import { UsagePanel } from './UsagePanel'
 
@@ -77,6 +78,9 @@ export function DetailPanel() {
           <div className="flex flex-col gap-4">
             <UsageSection title="Session total">
               <SessionUsagePanel session={session} />
+            </UsageSection>
+            <UsageSection title="Turns & largest requests">
+              <SessionTurnsPanel session={session} />
             </UsageSection>
             <UsageSection title="Selected request">
               {hasUsage && selection ? (
