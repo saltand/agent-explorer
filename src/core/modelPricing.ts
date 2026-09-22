@@ -1,33 +1,32 @@
+import type { TokenCounts, TokenUsage } from './types'
+import { isTokenCount } from './tokenUsage'
+
 export const LITELLM_PRICING_URL =
   'https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json'
 
 export interface ModelPricing {
-  inputCostPerToken: number
-  outputCostPerToken: number
-  cacheCreationInputTokenCost: number
-  cacheReadInputTokenCost: number
+  inputCostPerToken?: number
+  outputCostPerToken?: number
+  cacheCreationInputTokenCost?: number
+  cacheReadInputTokenCost?: number
 }
 
 export interface UsageCostBreakdown {
-  input: number
-  cacheCreation: number
-  cacheRead: number
-  output: number
-  total: number
-}
-
-export interface TokenUsageLike {
-  inputTokens: number
-  cacheCreationInputTokens: number
-  cacheReadInputTokens: number
-  outputTokens: number
+  input?: number
+  cacheCreation?: number
+  cacheRead?: number
+  output?: number
+  /** Only known and priced categories, including explicit zeroes. */
+  subtotal?: number
+  /** Present only when every billable category is known and priced. */
+  total?: number
 }
 
 let pricingCache: Record<string, ModelPricing> | null = null
 let pricingPromise: Promise<Record<string, ModelPricing>> | null = null
 
 function readCost(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
 }
 
 export function parseLiteLlmPricingTable(
@@ -45,9 +44,9 @@ export function parseLiteLlmPricingTable(
     const cacheReadInputTokenCost = readCost(record.cache_read_input_token_cost)
 
     if (
-      inputCostPerToken === undefined ||
-      outputCostPerToken === undefined ||
-      cacheCreationInputTokenCost === undefined ||
+      inputCostPerToken === undefined &&
+      outputCostPerToken === undefined &&
+      cacheCreationInputTokenCost === undefined &&
       cacheReadInputTokenCost === undefined
     ) {
       continue
@@ -113,21 +112,30 @@ export function resolveModelPricing(
 }
 
 export function calculateUsageCost(
-  usage: TokenUsageLike,
+  usage: TokenCounts & Partial<Pick<TokenUsage, 'issues'>>,
   pricing: ModelPricing,
 ): UsageCostBreakdown {
-  const input = usage.inputTokens * pricing.inputCostPerToken
-  const cacheCreation =
-    usage.cacheCreationInputTokens * pricing.cacheCreationInputTokenCost
-  const cacheRead = usage.cacheReadInputTokens * pricing.cacheReadInputTokenCost
-  const output = usage.outputTokens * pricing.outputCostPerToken
+  function cost(count: number | undefined, rate: number | undefined): number | undefined {
+    if (!isTokenCount(count)) return undefined
+    if (count === 0) return 0
+    if (readCost(rate) === undefined) return undefined
+    return readCost(count * rate!)
+  }
+  // Total input and reasoning are not additional billable categories.
+  const input = cost(usage.inputTokens, pricing.inputCostPerToken)
+  const cacheCreation = cost(usage.cacheCreationInputTokens, pricing.cacheCreationInputTokenCost)
+  const cacheRead = cost(usage.cacheReadInputTokens, pricing.cacheReadInputTokenCost)
+  const output = cost(usage.outputTokens, pricing.outputCostPerToken)
+  const known = [input, cacheCreation, cacheRead, output].filter(value => value !== undefined)
+  const subtotal = known.length > 0 ? readCost(known.reduce((sum, value) => sum + value, 0)) : undefined
 
   return {
     input,
     cacheCreation,
     cacheRead,
     output,
-    total: input + cacheCreation + cacheRead + output,
+    subtotal,
+    total: known.length === 4 && !usage.issues?.length ? subtotal : undefined,
   }
 }
 
