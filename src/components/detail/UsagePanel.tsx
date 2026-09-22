@@ -6,6 +6,7 @@ import {
   type UsageCostBreakdown,
 } from '../../core/modelPricing'
 import type { Selection, TokenCounts, TokenUsage } from '../../core/types'
+import { cacheReadShare } from '../../core/tokenUsage'
 import { SummaryRow } from './SummaryRow'
 import { useModelPricing, type PricingState } from './useModelPricing'
 
@@ -78,6 +79,11 @@ export function UsageDetails({ usage, model, pricingState, pricingTable }: {
     label: tokenLabels.cacheReadInputTokens,
     value: formatMetricValue(usage.cacheReadInputTokens, costs?.cacheRead, pricingState),
   })
+  // Cache hit rate needs cache reads and total input on the same basis.
+  const share = cacheReadShare(usage)
+  if (share !== undefined) {
+    rows.push({ label: 'Cache read share', value: `${(share * 100).toFixed(1)}% of total input` })
+  }
   rows.push({
     label: tokenLabels.outputTokens,
     value: formatMetricValue(usage.outputTokens, costs?.output, pricingState),

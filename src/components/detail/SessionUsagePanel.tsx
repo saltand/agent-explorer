@@ -6,6 +6,7 @@ import {
   type UsageCostBreakdown,
 } from '../../core/modelPricing'
 import { computeSessionUsage } from '../../core/sessionUsage'
+import { cacheReadShare } from '../../core/tokenUsage'
 import type { ExplorerSession } from '../../core/types'
 import { SummaryRow } from './SummaryRow'
 import { useModelPricing, type PricingState } from './useModelPricing'
@@ -82,14 +83,12 @@ export function SessionUsagePanel({ session }: { session: ExplorerSession }) {
   }
 
   // Cache hit rate needs both figures on the same basis and a non-zero divisor.
-  if (
-    usage.cacheReadInputTokens !== undefined &&
-    usage.totalInputTokens !== undefined &&
-    usage.totalInputTokens > 0 &&
-    !usage.incomplete
-  ) {
-    const rate = (usage.cacheReadInputTokens / usage.totalInputTokens) * 100
-    rows.push({ label: 'Cache read share', value: `${rate.toFixed(1)}% of total input` })
+  const sessionShare = cacheReadShare(usage)
+  if (sessionShare !== undefined && !usage.incomplete) {
+    rows.push({
+      label: 'Cache read share',
+      value: `${(sessionShare * 100).toFixed(1)}% of total input`,
+    })
   }
 
   if (usage.summedTotalTokens !== undefined) {

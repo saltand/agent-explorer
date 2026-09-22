@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeTokenUsage } from './tokenUsage'
+import { cacheReadShare, normalizeTokenUsage } from './tokenUsage'
 import { calculateUsageCost } from './modelPricing'
 
 const mapping = {
@@ -87,5 +87,31 @@ describe('normalizeTokenUsage', () => {
     const usage = normalizeTokenUsage({ input: Number.MAX_SAFE_INTEGER, read: 1, write: 0 }, mapping)!
     expect(usage.totalInputTokens).toBeUndefined()
     expect(usage.issues).toHaveLength(1)
+  })
+})
+
+describe('cacheReadShare', () => {
+  it('divides cache reads by total input', () => {
+    expect(cacheReadShare({ cacheReadInputTokens: 40, totalInputTokens: 100 })).toBeCloseTo(0.4)
+  })
+
+  it('returns undefined when either figure is missing', () => {
+    expect(cacheReadShare({ totalInputTokens: 100 })).toBeUndefined()
+    expect(cacheReadShare({ cacheReadInputTokens: 40 })).toBeUndefined()
+  })
+
+  it('returns undefined when total input is zero, avoiding a divide by zero', () => {
+    expect(cacheReadShare({ cacheReadInputTokens: 0, totalInputTokens: 0 })).toBeUndefined()
+  })
+
+  it('ignores cache writes, counting only reads as hits', () => {
+    // 30 reads out of 100 total input is 30%, regardless of any cache writes.
+    expect(
+      cacheReadShare({
+        cacheReadInputTokens: 30,
+        cacheCreationInputTokens: 50,
+        totalInputTokens: 100,
+      }),
+    ).toBeCloseTo(0.3)
   })
 })

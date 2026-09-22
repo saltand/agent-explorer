@@ -12,6 +12,19 @@ export function isTokenCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
+/**
+ * Cache read share on the "cache read tokens ÷ total input tokens" basis. Only
+ * returns a value when both figures are known on the same basis and the divisor
+ * is positive; cache writes never count as a hit. A ratio in `[0, 1]`, so the
+ * caller decides how to present it.
+ */
+export function cacheReadShare(counts: TokenCounts): number | undefined {
+  const read = counts.cacheReadInputTokens
+  const total = counts.totalInputTokens
+  if (!isTokenCount(read) || !isTokenCount(total) || total <= 0) return undefined
+  return read / total
+}
+
 /** Normalize one recorded usage object without inferring absent cache or reasoning counts. */
 export function normalizeTokenUsage(
   record: Record<string, unknown>,
