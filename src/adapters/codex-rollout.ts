@@ -35,6 +35,26 @@ function getString(record: Record<string, unknown>, key: string): string | undef
  * Its `input_tokens` already covers cache reads and writes, so it maps to
  * `totalInputTokens` and the shared normalizer derives ordinary input.
  */
+const CODEX_USAGE_FIELDS = {
+  totalInputTokens: 'input_tokens',
+  cacheReadInputTokens: 'cached_input_tokens',
+  cacheCreationInputTokens: 'cache_write_input_tokens',
+  outputTokens: 'output_tokens',
+  reasoningOutputTokens: 'reasoning_output_tokens',
+} as const
+
+function codexTotalTokens(record: Record<string, unknown>): number | undefined {
+  const value = record.total_tokens
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+/**
+ * Codex repeats a `token_count` event for every stream update, so the same
+ * request appears many times and some repeats arrive zeroed out after the
+ * request finished. The cumulative `total_token_usage` advances exactly once per
+ * request, which both identifies the request and orders the repeats: the first
+ * record at a given cumulative total is the real one.
+ */
 function parseCodexTokenUsage(payload: Record<string, unknown>): TokenUsage | undefined {
   const info = payload.info
   if (!isRecord(info)) return undefined
@@ -42,17 +62,26 @@ function parseCodexTokenUsage(payload: Record<string, unknown>): TokenUsage | un
   const total = isRecord(info.total_token_usage) ? info.total_token_usage : undefined
   const source = last ?? total
   if (!source) return undefined
-  return normalizeTokenUsage(source, {
+
+  const usage = normalizeTokenUsage(source, {
     path: last ? 'payload.info.last_token_usage' : 'payload.info.total_token_usage',
-    fields: {
-      totalInputTokens: 'input_tokens',
-      cacheReadInputTokens: 'cached_input_tokens',
-      cacheCreationInputTokens: 'cache_write_input_tokens',
-      outputTokens: 'output_tokens',
-      reasoningOutputTokens: 'reasoning_output_tokens',
-    },
+    fields: CODEX_USAGE_FIELDS,
     outputIncludesReasoning: true,
   })
+  if (!usage) return undefined
+
+  // Without `last_token_usage` the only figure available is the running total,
+  // which must not be added to per-request records.
+  if (!last) return { ...usage, scope: 'cumulative' }
+
+  const cumulative = total ? codexTotalTokens(total) : undefined
+  if (cumulative === undefined) return usage
+  return {
+    ...usage,
+    requestKey: `cumulative:${cumulative}`,
+    duplicatePolicy: 'keep-first',
+    sessionTotalTokens: cumulative,
+  }
 }
 
 function extractMessageText(content: unknown): string {

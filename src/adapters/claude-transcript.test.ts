@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { detectAndParse } from '../core/registry'
 import { parseJsonlText } from '../core/jsonl'
 import { BLOCK_TEXT_LIMIT } from '../core/text'
+import { UsageAccumulator } from '../core/usageAggregate'
 import { claudeTranscriptAdapter, parseClaudeTokenUsage } from './claude-transcript'
 
 const fixtureDir = join(dirname(fileURLToPath(import.meta.url)), '../fixtures')
@@ -36,6 +37,35 @@ describe('Claude usage normalization', () => {
     expect(usage.inputTokens).toBeUndefined()
     expect(usage.issues).toHaveLength(1)
     expect(usage.sources.inputTokens).toEqual(['message.usage.input_tokens'])
+  })
+
+  it('keys usage on requestId so repeats of one request collapse', () => {
+    const usage = parseClaudeTokenUsage({
+      requestId: 'req_abc',
+      message: { usage: { input_tokens: 9, output_tokens: 238 } },
+    })!
+    expect(usage.requestKey).toBe('request:req_abc')
+    // Claude grows output_tokens as a response streams, so the last record wins.
+    expect(usage.duplicatePolicy).toBeUndefined()
+  })
+
+  it('leaves usage unkeyed when the line records no requestId', () => {
+    const usage = parseClaudeTokenUsage({ message: { usage: { input_tokens: 9, output_tokens: 8 } } })!
+    expect(usage.requestKey).toBeUndefined()
+  })
+})
+
+describe('Claude session aggregation', () => {
+  it('counts each streamed request once', () => {
+    const session = claudeTranscriptAdapter.parse(parseJsonlText(sampleText).lines, 'transcript.jsonl')
+    const accumulator = new UsageAccumulator()
+    for (const event of session.events) if (event.usage) accumulator.add(event.usage, event.model)
+    const result = accumulator.result()
+    // The fixture repeats six requests across nineteen lines.
+    expect(result.requestCount).toBe(6)
+    expect(result.duplicateCount).toBe(13)
+    // The 8/8/238 streaming group contributes only its final 238.
+    expect(result.outputTokens).toBe(246)
   })
 })
 

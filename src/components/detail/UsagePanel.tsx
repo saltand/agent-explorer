@@ -1,7 +1,5 @@
-import { useEffect, useState } from 'react'
 import {
   calculateUsageCost,
-  fetchModelPricing,
   formatUsd,
   resolveModelPricing,
   type ModelPricing,
@@ -9,8 +7,7 @@ import {
 } from '../../core/modelPricing'
 import type { Selection, TokenCounts, TokenUsage } from '../../core/types'
 import { SummaryRow } from './SummaryRow'
-
-type PricingState = 'idle' | 'loading' | 'ready' | 'error'
+import { useModelPricing, type PricingState } from './useModelPricing'
 
 const tokenLabels: Record<keyof TokenCounts, string> = {
   totalInputTokens: 'Total input tokens',
@@ -35,29 +32,7 @@ function formatMetricValue(
 }
 
 export function UsagePanel({ selection }: { selection: Selection }) {
-  const [pricingState, setPricingState] = useState<PricingState>('idle')
-  const [pricingTable, setPricingTable] = useState<Record<string, ModelPricing> | null>(
-    null,
-  )
-
-  useEffect(() => {
-    let cancelled = false
-    setPricingState('loading')
-    void fetchModelPricing()
-      .then((table) => {
-        if (cancelled) return
-        setPricingTable(table)
-        setPricingState('ready')
-      })
-      .catch(() => {
-        if (cancelled) return
-        setPricingState('error')
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const { pricingState, pricingTable } = useModelPricing()
 
   const { usage, model } = selection.event || {}
   if (!usage) return null

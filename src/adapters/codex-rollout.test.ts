@@ -287,6 +287,40 @@ describe('Codex token_count usage', () => {
       'payload.info.last_token_usage.input_tokens',
     ])
   })
+
+  it('keys repeats on the cumulative total and keeps the first of them', () => {
+    const session = codexRolloutAdapter.parse(parseJsonlText(sampleText).lines, 'rollout.jsonl')
+    const usage = session.events.find((event) => event.kind === 'token_count')?.usage
+    // Stream updates repeat the event, and stale repeats arrive zeroed out.
+    expect(usage?.duplicatePolicy).toBe('keep-first')
+    expect(usage?.requestKey).toBe('cumulative:24147')
+    expect(usage?.sessionTotalTokens).toBe(24147)
+    expect(usage?.scope).toBeUndefined()
+  })
+
+  it('marks a total-only record cumulative so it is never summed', () => {
+    const line = JSON.stringify({
+      timestamp: '2026-01-01T00:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 100,
+            cached_input_tokens: 10,
+            cache_write_input_tokens: 0,
+            output_tokens: 5,
+            reasoning_output_tokens: 0,
+            total_tokens: 105,
+          },
+        },
+      },
+    })
+    const session = codexRolloutAdapter.parse(parseJsonlText(line).lines, 'rollout.jsonl')
+    const usage = session.events.find((event) => event.kind === 'token_count')?.usage
+    expect(usage?.scope).toBe('cumulative')
+    expect(usage?.requestKey).toBeUndefined()
+  })
 })
 
 describe('detectAndParse with Codex rollout', () => {

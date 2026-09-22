@@ -153,13 +153,19 @@ function timelinePreview(type: string, record: Record<string, unknown>): string 
   return ''
 }
 
+/**
+ * Claude repeats a message's usage across each line of a streamed response, and
+ * `output_tokens` grows as more of the response arrives. Lines sharing a
+ * `requestId` therefore describe one request, and the last one holds its final
+ * counts.
+ */
 export function parseClaudeTokenUsage(raw: unknown): TokenUsage | undefined {
   if (!isRecord(raw) || !isRecord(raw.message)) return undefined
 
   const usage = raw.message.usage
   if (!isRecord(usage)) return undefined
 
-  return normalizeTokenUsage(usage, {
+  const normalized = normalizeTokenUsage(usage, {
     path: 'message.usage',
     fields: {
       inputTokens: 'input_tokens',
@@ -168,6 +174,10 @@ export function parseClaudeTokenUsage(raw: unknown): TokenUsage | undefined {
       cacheReadInputTokens: 'cache_read_input_tokens',
     },
   })
+  if (!normalized) return undefined
+
+  const requestId = typeof raw.requestId === 'string' ? raw.requestId : undefined
+  return requestId ? { ...normalized, requestKey: `request:${requestId}` } : normalized
 }
 
 export function parseClaudeModel(raw: unknown): string | undefined {

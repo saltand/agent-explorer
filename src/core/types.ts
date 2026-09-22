@@ -43,11 +43,35 @@ export interface TokenCounts {
   contentOutputTokens?: number
 }
 
+/**
+ * What one recorded usage object covers. Only `request` records may be summed;
+ * `cumulative` snapshots already include every earlier request in the session.
+ */
+export type UsageScope = 'request' | 'cumulative'
+
 export interface TokenUsage extends TokenCounts {
   /** Paths into the owning TimelineEvent.raw; derived counts list every operand. */
   sources: Partial<Record<keyof TokenCounts, string[]>>
   /** Invalid counts and inconsistent totals remain inspectable in raw JSON. */
   issues: string[]
+  /** Defaults to `request`; aggregation refuses to sum cumulative snapshots. */
+  scope?: UsageScope
+  /**
+   * Records sharing a key describe one request, so aggregation counts only one
+   * of them. Absent when the log gives no way to tell repeats apart.
+   */
+  requestKey?: string
+  /**
+   * Which record wins among repeats. `keep-last` suits logs that re-emit a
+   * growing total while a response streams; `keep-first` suits logs that echo
+   * a stale record after the request already finished. Defaults to `keep-last`.
+   */
+  duplicatePolicy?: 'keep-last' | 'keep-first'
+  /**
+   * Session-to-date total recorded alongside a per-request record, used to
+   * check summed requests against the log's own running total.
+   */
+  sessionTotalTokens?: number
 }
 
 export interface ContentBlock {

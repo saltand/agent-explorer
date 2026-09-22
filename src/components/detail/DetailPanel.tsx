@@ -9,6 +9,7 @@ import { useSessionStore } from '../../store/sessionStore'
 import { CollapsibleJson } from './CollapsibleJson'
 import { EventSummary } from './EventSummary'
 import { SessionMetaPanel } from './SessionMetaPanel'
+import { SessionUsagePanel } from './SessionUsagePanel'
 import { UsagePanel } from './UsagePanel'
 
 type DetailTab = 'session' | 'summary' | 'usage' | 'raw'
@@ -37,16 +38,6 @@ export function DetailPanel() {
     }
   }, [lastSelectedEventId, setLastSelectedEventId, tab, selectedEventId, hasEvent])
 
-  useEffect(() => {
-    if (tab === 'usage' && !hasUsage) {
-      if (hasEvent) {
-        setTab('summary')
-      } else {
-        setTab('session')
-      }
-    }
-  }, [tab, hasEvent, hasUsage])
-
   if (!session) {
     return (
       <div className={`flex h-full items-center justify-center p-4 ${emptyState}`}>
@@ -68,11 +59,7 @@ export function DetailPanel() {
         >
           Summary
         </TabButton>
-        <TabButton
-          active={tab === 'usage'}
-          onClick={() => setTab('usage')}
-          disabled={!hasUsage}
-        >
+        <TabButton active={tab === 'usage'} onClick={() => setTab('usage')}>
           Usage
         </TabButton>
         <TabButton
@@ -86,10 +73,36 @@ export function DetailPanel() {
       <div className="flex-1 overflow-auto p-3">
         {tab === 'session' && <SessionMetaPanel session={session} />}
         {tab === 'summary' && hasEvent && <EventSummary selection={selection} />}
-        {tab === 'usage' && hasUsage && <UsagePanel selection={selection} />}
+        {tab === 'usage' && (
+          <div className="flex flex-col gap-4">
+            <UsageSection title="Session total">
+              <SessionUsagePanel session={session} />
+            </UsageSection>
+            <UsageSection title="Selected request">
+              {hasUsage && selection ? (
+                <UsagePanel selection={selection} />
+              ) : (
+                <p className="text-xs text-secondary">
+                  {hasEvent
+                    ? 'The selected record reports no token usage.'
+                    : 'Select a record to see its usage.'}
+                </p>
+              )}
+            </UsageSection>
+          </div>
+        )}
         {tab === 'raw' && selection?.event && <CollapsibleJson value={selection.event.raw} />}
       </div>
     </div>
+  )
+}
+
+function UsageSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-2">
+      <h3 className="text-xs font-semibold text-primary">{title}</h3>
+      {children}
+    </section>
   )
 }
 
