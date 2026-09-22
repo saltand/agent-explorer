@@ -29,11 +29,25 @@ export interface ParseWarning {
   message: string
 }
 
-export interface TokenUsage {
-  inputTokens: number
-  cacheCreationInputTokens: number
-  cacheReadInputTokens: number
-  outputTokens: number
+/** Missing counts stay undefined; zero means explicitly reported or safely derived. */
+export interface TokenCounts {
+  /** Ordinary input, excluding both cache reads and cache writes. */
+  inputTokens?: number
+  cacheCreationInputTokens?: number
+  cacheReadInputTokens?: number
+  /** All input, including cache reads and writes. Never an extra billable category. */
+  totalInputTokens?: number
+  outputTokens?: number
+  reasoningOutputTokens?: number
+  /** Output excluding reasoning; only derived when inclusion is established. */
+  contentOutputTokens?: number
+}
+
+export interface TokenUsage extends TokenCounts {
+  /** Paths into the owning TimelineEvent.raw; derived counts list every operand. */
+  sources: Partial<Record<keyof TokenCounts, string[]>>
+  /** Invalid counts and inconsistent totals remain inspectable in raw JSON. */
+  issues: string[]
 }
 
 export interface ContentBlock {
