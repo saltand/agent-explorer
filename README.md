@@ -23,6 +23,14 @@ This starts a local server on `127.0.0.1`, indexes the session logs it finds und
 - **Detail panel** — session metadata, event summary, token usage & estimated cost, and raw JSON viewer
 - **Theme** — light / dark mode with system preference support
 
+### Token usage
+
+Usage distinguishes ordinary input, cache reads, cache writes, and total input. Claude and Pi report ordinary input directly. Codex and Grok report an inclusive input count, so ordinary input is derived by subtracting cache reads and writes. Codex counts come from its `token_count` events; Grok records per-turn counts in a sibling `updates.jsonl` that the server joins onto the conversation as `turn_completed` events. Cursor transcripts record no token counts, so usage is unavailable for them.
+
+Missing counts appear as **Not reported**, while recorded zeroes remain zero. Reasoning counts are shown when recorded; non-reasoning output is derived only when the output breakdown is known. Expand **Token field sources** to inspect the original event field paths, or open **Raw JSON** for the recorded values.
+
+Cost estimates use disjoint input categories and charge output once, including any reasoning already counted in output. Missing counts or prices produce an **Estimated subtotal** marked incomplete. Invalid or inconsistent counts are flagged instead of silently corrected. Estimates use current model prices and are not billing records.
+
 ## CLI
 
 ```
