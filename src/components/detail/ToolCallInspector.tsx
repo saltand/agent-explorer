@@ -1,7 +1,9 @@
 import { useMemo } from 'react'
+import { codeExecSource } from '../../core/codeExec'
 import { inspectToolCall, selectedToolItem } from '../../core/toolCalls'
 import type { ConversationListItem, ExplorerSession, Selection } from '../../core/types'
 import { useSessionStore } from '../../store/sessionStore'
+import { CodeInspector } from './CodeInspector'
 import { CollapsibleJson } from './CollapsibleJson'
 import { ExpandablePre } from '../shared/ExpandablePre'
 import { SummaryRow } from './SummaryRow'
@@ -40,6 +42,14 @@ export function ToolCallInspector({
     [session.conversationItems, item],
   )
   if (!info) return null
+
+  const codeSource = codeExecSource(
+    info.call?.block?.toolName,
+    info.call?.block?.toolInput,
+  )
+  const argsJson = info.call?.block?.toolInput
+    ? JSON.stringify(info.call.block.toolInput, null, 2)
+    : undefined
 
   const statusTone =
     info.status === 'failed'
@@ -126,18 +136,28 @@ export function ToolCallInspector({
         </div>
       )}
 
-      {info.call?.block?.toolInput && Object.keys(info.call.block.toolInput).length > 0 && (
-        <div className="flex flex-col gap-1">
-          <h4 className="text-xs font-medium text-secondary">Arguments</h4>
-          <CollapsibleJson value={info.call.block.toolInput} />
-        </div>
-      )}
+      {codeSource ? (
+        <CodeInspector
+          source={codeSource}
+          argsJson={argsJson}
+          output={info.result?.block?.text}
+        />
+      ) : (
+        <>
+          {info.call?.block?.toolInput && Object.keys(info.call.block.toolInput).length > 0 && (
+            <div className="flex flex-col gap-1">
+              <h4 className="text-xs font-medium text-secondary">Arguments</h4>
+              <CollapsibleJson value={info.call.block.toolInput} />
+            </div>
+          )}
 
-      {info.result?.block?.text && (
-        <div className="flex flex-col gap-1">
-          <h4 className="text-xs font-medium text-secondary">Result</h4>
-          <ExpandablePre text={info.result.block.text} className="rounded border border-separator bg-background px-3 py-2" />
-        </div>
+          {info.result?.block?.text && (
+            <div className="flex flex-col gap-1">
+              <h4 className="text-xs font-medium text-secondary">Result</h4>
+              <ExpandablePre text={info.result.block.text} className="rounded border border-separator bg-background px-3 py-2" />
+            </div>
+          )}
+        </>
       )}
     </section>
   )
